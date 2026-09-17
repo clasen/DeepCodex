@@ -87,16 +87,16 @@ export function saveCredentials(file, name, secret) {
 
 export async function main(args) {
   if (args.length === 2 && ['--help', '-h'].includes(args[1])) {
-    console.log('Usage: opencodex configure\nEnter the DeepSeek key in a hidden terminal prompt. Saves a private plaintext file outside the repository.');
+    console.log('Usage: deepcodex configure\nEnter the DeepSeek key in a hidden terminal prompt. Saves a private plaintext file outside the repository.');
     return 0;
   }
-  if (args.length !== 1 || args[0] !== 'configure') throw new Error('Usage: opencodex configure (no key arguments accepted)');
+  if (args.length !== 1 || args[0] !== 'configure') throw new Error('Usage: deepcodex configure (no key arguments accepted)');
   const config = loadConfig();
   const name = config.codex.model_providers[config.codex.model_provider].env_key;
   const configured = config.credentials.env_file;
   const file = configured.startsWith('~/') ? path.join(os.homedir(), configured.slice(2)) : configured;
   const secret = await readSecret();
   saveCredentials(file, name, secret);
-  console.log('DeepSeek key saved with owner-only permissions. Run opencodex install to activate it or reload an existing router.');
+  console.log('DeepSeek key saved with owner-only permissions. Run deepcodex install to activate it or reload an existing router.');
   return 0;
 }

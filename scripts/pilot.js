@@ -120,7 +120,7 @@ export async function run() {
   const sourceEnv = workerEnvironment(process.env);
   loadCredentials(sourceEnv, workerConfig);
   const diagnosis = doctor(workerConfig, sourceEnv);
-  if (diagnosis.status !== 'ready') throw new Error('OpenCodex doctor is not ready');
+  if (diagnosis.status !== 'ready') throw new Error('DeepCodex doctor is not ready');
   const authSource = authFile(sourceEnv);
   if (!statSync(authSource, { throwIfNoEntry: false })?.isFile()) {
     throw new Error('Pilot requires the existing Codex auth.json login');
@@ -165,7 +165,7 @@ export async function run() {
         { env, cwd: workspace, stdio: ['pipe', 'pipe', routerErrors], detached: true });
       router.stdin.end(JSON.stringify({ config, capability }));
       const ready = await readRouterReadiness(router, config.startup_timeout_seconds * 1000, signals.signal);
-      emit({ event: 'pilot.router_started', ...ready, cwd: workspace, owner: 'OpenCodex isolated pilot',
+      emit({ event: 'pilot.router_started', ...ready, cwd: workspace, owner: 'DeepCodex isolated pilot',
         artifacts: runDir });
       const values = { ...workerConfig.codex };
       Object.assign(values, { model: config.parent_model, model_provider: 'opencodex-pilot',
@@ -175,7 +175,7 @@ export async function run() {
       values.features = { ...values.features, multi_agent: true, multi_agent_v2: true,
         enable_request_compression: false };
       values.model_providers = { 'opencodex-pilot': {
-        name: 'OpenCodex isolated pilot',
+        name: 'DeepCodex isolated pilot',
         base_url: `http://127.0.0.1:${ready.port}`,
         wire_api: 'responses',
         requires_openai_auth: true,

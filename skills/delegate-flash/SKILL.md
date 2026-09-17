@@ -1,12 +1,12 @@
 ---
 name: delegate-flash
-description: Delegate bounded coding tasks to native DeepSeek Flash subagents in Codex through OpenCodex. Use when OpenCodex or Flash delegation is requested, or when diagnosing the Desktop integration.
+description: Delegate bounded coding tasks to native DeepSeek Flash subagents in Codex through DeepCodex. Use when DeepCodex or Flash delegation is requested, or when diagnosing the Desktop integration.
 ---
 
-# OpenCodex
+# DeepCodex
 
 Keep the coordinator on the user's selected native model. DeepSeek Flash runs as
-an actual Codex subagent through the local OpenCodex router. Use the native
+an actual Codex subagent through the local DeepCodex router. Use the native
 collaboration tools for spawning, follow-ups, waiting, and interruption; the
 normal delegation path does not launch a separate `codex exec` worker.
 
@@ -42,7 +42,7 @@ is in `config/desktop.json`, shared transport defaults in `config/pilot.json`,
 and the DeepSeek model and credential path in `config/worker.json`.
 
 Run `node <plugin>/scripts/desktop.js status` to check the local service without
-inference. The service is `com.opencodex.router`, bound only to loopback. Private
+inference. The service is `com.deepcodex.router`, bound only to loopback. Private
 state and bounded metadata receipts live in `~/.config/opencodex/desktop`.
 Receipts contain routing and tool names, not prompts, tool arguments or tokens.
 Do not print `state.json`, provider headers, credential files or full user config.

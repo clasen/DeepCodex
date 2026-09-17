@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import * as worker from '../scripts/worker.js';
 
 const WORKER = fileURLToPath(new URL('../scripts/worker.js', import.meta.url));
-const BIN = fileURLToPath(new URL('../bin/opencodex.js', import.meta.url));
+const BIN = fileURLToPath(new URL('../bin/deepcodex.js', import.meta.url));
 const FAKE = fs.readFileSync(new URL('./fake-codex.js', import.meta.url), 'utf8');
 
 const previousTmpdir = process.env.TMPDIR;
@@ -133,7 +133,7 @@ test('lock blocks a parallel worker and releases', async (t) => {
   const box = fixture(t);
   const lock = await worker.workerLock();
   try {
-    await assert.rejects(() => box.runWorker(), /Another OpenCodex worker/);
+    await assert.rejects(() => box.runWorker(), /Another DeepCodex worker/);
   } finally {
     lock.close();
   }
@@ -145,6 +145,39 @@ test('project MCP servers are rejected before spawn', async (t) => {
   fs.mkdirSync(path.join(box.dir, '.codex'));
   fs.writeFileSync(path.join(box.dir, '.codex', 'config.toml'), '[mcp_servers.example]\ncommand="unexpected"\n');
   await assert.rejects(() => box.runWorker(), /Project MCP/);
+});
+
+test('Desktop discovery checks both app names and skips unusable binaries', (t) => {
+  const box = fixture(t);
+  const apps = path.join(box.dir, 'Applications');
+  const empty = path.join(box.dir, 'empty');
+  fs.mkdirSync(empty);
+  const options = { platform: 'darwin', applicationDirs: [apps] };
+  const env = { ...box.env, PATH: empty };
+  assert.equal(worker.resolveCodex(env, options), undefined);
+  assert.match(worker.doctor(box.config, env, options).errors[0], /CLI not found/);
+  for (const app of ['ChatGPT.app', 'Codex.app']) {
+    const binary = path.join(apps, app, 'Contents/Resources/codex');
+    fs.mkdirSync(path.dirname(binary), { recursive: true });
+    fs.copyFileSync(box.binary, binary);
+    fs.chmodSync(binary, 0o700);
+    const report = worker.doctor(box.config, env, options);
+    assert.equal(report.status, 'ready');
+    assert.equal(report.codex, binary);
+  }
+  const preferred = path.join(apps, 'Codex.app/Contents/Resources/codex');
+  fs.chmodSync(preferred, 0o600);
+  assert.equal(worker.resolveCodex(env, options), path.join(apps, 'ChatGPT.app/Contents/Resources/codex'));
+  assert.equal(worker.resolveCodex(env, { ...options, platform: 'linux' }), undefined);
+  assert.equal(worker.resolveCodex({ ...env, PATH: box.dir }, options), box.binary);
+});
+
+test('incompatible PATH CLI reports an actionable error', (t) => {
+  const box = fixture(t);
+  fs.writeFileSync(box.binary, '#!/bin/sh\necho incompatible\n');
+  const report = worker.doctor(box.config, { ...box.env, PATH: box.dir });
+  assert.equal(report.status, 'not_ready');
+  assert.match(report.errors[0], /incompatible.*--strict-config/);
 });
 
 test('doctor without an api key never runs inference', (t) => {
@@ -287,7 +320,7 @@ test('cancel returns json and terminates descendants', async (t) => {
 
 // The CLI imports main() instead of executing worker.js, so cancellation must not depend on the
 // entrypoint branch that registers the signal handlers.
-test('cancel works through the opencodex cli, which imports main', async (t) => {
+test('cancel works through the deepcodex cli, which imports main', async (t) => {
   const box = fixture(t);
   const pidFile = path.join(box.dir, 'bin-descendant.pid');
   const env = { ...process.env, PATH: box.dir, HOME: box.dir, DEEPSEEK_API_KEY: 'test-secret' };
@@ -304,7 +337,8 @@ test('help and run flags stay available without loading sqlite', (t) => {
   assert.match(help.stdout, /--task-file/);
   assert.match(help.stdout, /--write/);
   assert.equal(help.stderr, '', 'help must not load the experimental sqlite module');
-  const doctor = spawnSync(process.execPath, [WORKER, 'doctor'], { encoding: 'utf8', env: { PATH: empty } });
+  const box = fixture(t);
+  const doctor = spawnSync(process.execPath, [WORKER, 'doctor'], { encoding: 'utf8', env: { PATH: box.dir, HOME: empty } });
   assert.equal(doctor.status, 1);
   assert.equal(JSON.parse(doctor.stdout).status, 'not_ready');
   assert.ok(!doctor.stderr.includes('ExperimentalWarning'), 'doctor must not load the experimental sqlite module');

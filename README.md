@@ -1,6 +1,6 @@
-# OpenCodex
+# DeepCodex
 
-OpenCodex keeps the coordinator on your selected native Codex model and runs
+DeepCodex keeps the coordinator on your selected native Codex model and runs
 DeepSeek Flash as an actual Codex subagent through a local loopback router. The
 subagent appears in the normal collaboration tools (`spawn_agent`,
 `followup_task`, `wait_agent`, `interrupt_agent`) under the model name
@@ -12,9 +12,13 @@ native coordinator model is not replaced.
 - macOS. The installer and the LaunchAgent service are macOS-only.
 - Node.js >= 22.15. The worker uses `node:sqlite`, `fetch` and
   `import.meta.resolve`.
-- A Codex CLI on `PATH` whose `codex exec` supports `--ignore-user-config`,
-  `--ephemeral`, `--json` and `--strict-config`. `opencodex doctor` verifies
-  this before anything else is activated.
+- A compatible Codex CLI, either on `PATH` or bundled with Codex Desktop.
+  When no CLI is on `PATH`, DeepCodex checks `Codex.app` and `ChatGPT.app`
+  under `~/Applications` and `/Applications`, in that order. No separate CLI
+  installation is needed when Desktop includes a compatible binary.
+  `codex exec` must support `--ignore-user-config`, `--ephemeral`, `--json`
+  and `--strict-config`; `deepcodex doctor` verifies this before activation.
+  A CLI on `PATH` takes priority, even if it is incompatible.
 - A DeepSeek API key.
 
 ## Install globally
@@ -22,24 +26,42 @@ native coordinator model is not replaced.
 Once the package is published to npm:
 
 ```sh
-npm install --global opencodex
-opencodex configure
-opencodex doctor
-opencodex install
+npm install --global deepcodex
+deepcodex configure
+deepcodex doctor
+deepcodex install
 ```
 
-The global installation adds `opencodex` to npm's global bin directory, which
+The global installation adds `deepcodex` to npm's global bin directory, which
 must be on your `PATH`. Run it from any directory; no checkout path is needed.
 
 To install the local checkout globally before publication, run these commands
-from the repository, then use the same `opencodex` commands above:
+from the repository, then use the same `deepcodex` commands above:
 
 ```sh
 pnpm install --frozen-lockfile
 npm install --global .
 ```
 
-### 1. `opencodex configure`
+### Upgrading from OpenCodex
+
+The npm package, command and plugin are now named `deepcodex`, and the service
+is `com.deepcodex.router`. Existing private paths (`~/.config/opencodex`,
+`~/.local/share/opencodex`) and provider IDs are retained, reusing your saved
+key and backup.
+
+If the previous `com.opencodex.router` LaunchAgent is installed, unload it and
+remove its plist before running `deepcodex install` to avoid competing services:
+
+```sh
+launchctl bootout "gui/$(id -u)/com.opencodex.router"
+rm ~/Library/LaunchAgents/com.opencodex.router.plist
+```
+
+Run `deepcodex doctor` and `deepcodex install` to refresh the runtime; there is
+no need to run `configure` again if your key is already saved.
+
+### 1. `deepcodex configure`
 
 `configure` asks for the DeepSeek API key with hidden input on the terminal and
 stores it in `~/.config/opencodex/.env`. It creates the directory with mode
@@ -57,7 +79,7 @@ the file, as does the installed desktop service. Credentials stay outside the
 repository. The file permissions restrict other users, but programs running as
 your user can still read it.
 
-### 2. `opencodex doctor`
+### 2. `deepcodex doctor`
 
 `doctor` checks the local prerequisites without running inference: that a
 compatible Codex CLI is reachable and that the DeepSeek credential is present.
@@ -66,7 +88,7 @@ unless the doctor reports `ready`.
 Neither `configure` nor `doctor` contacts DeepSeek to validate the key. A `ready`
 result confirms local prerequisites, not provider authentication or account credit.
 
-### 3. `opencodex install`
+### 3. `deepcodex install`
 
 `install` activates the desktop integration:
 
@@ -74,7 +96,7 @@ result confirms local prerequisites, not provider authentication or account cred
   dependency) to `~/.local/share/opencodex/runtime`;
 - writes private state, the model catalog and receipts to
   `~/.config/opencodex/desktop`;
-- installs and starts the `com.opencodex.router` LaunchAgent, bound only to
+- installs and starts the `com.deepcodex.router` LaunchAgent, bound only to
   `127.0.0.1:4207`;
 - updates `~/.codex/config.toml` with the local provider, the subagent defaults
   and the generated model catalog, keeping a pre-install backup at
@@ -90,7 +112,7 @@ that were already open keep the provider and model catalog they started with.
 ## Plugin skill
 
 The delegation skill lives in `skills/delegate-flash/SKILL.md` and is loaded by
-installing the OpenCodex plugin through a Codex marketplace. Installing the npm
+installing the DeepCodex plugin through a Codex marketplace. Installing the npm
 package or running the commands above does not install the skill, and this
 checkout is not a marketplace source by itself.
 
@@ -98,13 +120,13 @@ checkout is not a marketplace source by itself.
 
 | Command | Purpose |
 | --- | --- |
-| `opencodex configure` | Prompt for the DeepSeek API key and write `~/.config/opencodex/.env`. |
-| `opencodex doctor` | Check Codex CLI compatibility and credential presence without inference. |
-| `opencodex install` | Install the router runtime, the LaunchAgent and the user-level Codex settings. |
-| `opencodex status` | Query the installed router health endpoint without inference. |
-| `opencodex run --cwd PATH --task-file PATH [--write]` | Run one bounded isolated worker ticket against DeepSeek. Read-only unless `--write` is given. |
-| `opencodex pilot` | Run the opt-in live native-delegation test; consumes Codex and DeepSeek usage. |
-| `opencodex --version`, `opencodex --help` | Print the package version or the command list. |
+| `deepcodex configure` | Prompt for the DeepSeek API key and write `~/.config/opencodex/.env`. |
+| `deepcodex doctor` | Check Codex CLI compatibility and credential presence without inference. |
+| `deepcodex install` | Install the router runtime, the LaunchAgent and the user-level Codex settings. |
+| `deepcodex status` | Query the installed router health endpoint without inference. |
+| `deepcodex run --cwd PATH --task-file PATH [--write]` | Run one bounded isolated worker ticket against DeepSeek. Read-only unless `--write` is given. |
+| `deepcodex pilot` | Run the opt-in live native-delegation test; consumes Codex and DeepSeek usage. |
+| `deepcodex --version`, `deepcodex --help` | Print the package version or the command list. |
 
 `run` executes a single ticket and consumes DeepSeek API usage. It takes an
 exclusive per-user lock, so only one worker runs at a time.

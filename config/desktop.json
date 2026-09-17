@@ -4,6 +4,6 @@
   "request_timeout_ms": 300000,
   "max_request_bytes": 134217728,
   "max_response_bytes": 33554432,
-  "service_label": "com.opencodex.router",
+  "service_label": "com.deepcodex.router",
   "service_throttle_seconds": 10
 }

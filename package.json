@@ -17,7 +17,7 @@
   ],
   "type": "module",
   "bin": {
-    "deepcodex": "bin/opencodex.js"
+    "deepcodex": "bin/deepcodex.js"
   },
   "files": [
     "bin/*.js",

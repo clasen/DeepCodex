@@ -99,8 +99,23 @@ export function redact(value, secret) {
   return value;
 }
 
-export function doctor(config, env) {
+// Desktop bundles the CLI but does not necessarily expose it on PATH.
+export function resolveCodex(env, { platform = process.platform, applicationDirs = [
+  path.join(env.HOME || os.homedir(), 'Applications'), '/Applications',
+] } = {}) {
   const binary = which('codex', env.PATH);
+  if (binary || platform !== 'darwin') return binary;
+  for (const directory of applicationDirs) {
+    for (const app of ['Codex.app', 'ChatGPT.app']) {
+      const bundled = which('codex', path.join(directory, app, 'Contents', 'Resources'));
+      if (bundled) return bundled;
+    }
+  }
+  return undefined;
+}
+
+export function doctor(config, env, discoveryOptions) {
+  const binary = resolveCodex(env, discoveryOptions);
   const report = { status: 'ready', codex: binary ?? null, api_key_present: Boolean(env.DEEPSEEK_API_KEY) };
   if (binary) {
     const timeout = config.limits.version_timeout_seconds * 1000;
@@ -110,7 +125,14 @@ export function doctor(config, env) {
     report.compatible_cli = version.status === 0 && help.status === 0
       && REQUIRED_CLI_FLAGS.every(flag => help.stdout.includes(flag));
   }
-  if (!binary || !report.compatible_cli || !report.api_key_present) report.status = 'not_ready';
+  const errors = [];
+  if (!binary) errors.push('Codex CLI not found on PATH or in Codex.app/ChatGPT.app under ~/Applications or /Applications. Install Codex Desktop or add a compatible codex CLI to PATH.');
+  else if (!report.compatible_cli) errors.push(`Codex CLI at ${binary} is incompatible; required exec flags: ${REQUIRED_CLI_FLAGS.join(', ')}. Update Codex Desktop or the CLI on PATH.`);
+  if (!report.api_key_present) errors.push('DeepSeek API key is missing. Run deepcodex configure.');
+  if (errors.length) {
+    report.status = 'not_ready';
+    report.errors = errors;
+  }
   return report;
 }
 
@@ -147,7 +169,7 @@ export async function workerLock() {
     database.exec('BEGIN EXCLUSIVE');
   } catch (error) {
     database.close();
-    if (error.errcode === SQLITE_BUSY) throw new Error('Another OpenCodex worker is running; wait for it or cancel that run');
+    if (error.errcode === SQLITE_BUSY) throw new Error('Another DeepCodex worker is running; wait for it or cancel that run');
     throw error;
   }
   let closed = false;

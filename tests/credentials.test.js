@@ -9,7 +9,7 @@ import test from 'node:test';
 import { readSecret, saveCredentials } from '../scripts/credentials.js';
 import { readEnvKey } from '../scripts/worker.js';
 
-const CLI = fileURLToPath(new URL('../bin/opencodex.js', import.meta.url));
+const CLI = fileURLToPath(new URL('../bin/deepcodex.js', import.meta.url));
 const NAME = 'DEEPSEEK_API_KEY';
 
 function fixture(t) {
@@ -103,5 +103,5 @@ test('CLI rejects key arguments and piped input without disclosing or saving the
   }
   const help = spawnSync(process.execPath, [CLI, 'configure', '--help'], { env: { HOME: root }, encoding: 'utf8' });
   assert.equal(help.status, 0, help.stderr);
-  assert.match(help.stdout, /Usage: opencodex configure/);
+  assert.match(help.stdout, /Usage: deepcodex configure/);
 });

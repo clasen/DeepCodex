@@ -8,7 +8,7 @@ import { copyRuntime } from '../scripts/desktop.js';
 import { parseToml } from '../scripts/toml.js';
 import { ROOT } from '../scripts/worker.js';
 
-function fixture(t, healthy) {
+function fixture(t, healthy, { bundled = false, incompatible = false } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'opencodex-install-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home');
@@ -31,6 +31,12 @@ function fixture(t, healthy) {
     else if (args.join(' ') === 'debug models --bundled') console.log(JSON.stringify({models:[{slug:'gpt-6-astra'}]}));
     else process.exit(9);
   `, { mode: 0o700 });
+  if (incompatible) fs.writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\necho incompatible\n');
+  if (bundled) {
+    const resources = path.join(home, 'Applications/ChatGPT.app/Contents/Resources');
+    fs.mkdirSync(resources, { recursive: true });
+    fs.renameSync(path.join(bin, 'codex'), path.join(resources, 'codex'));
+  }
   const calls = path.join(root, 'launchctl.jsonl');
   fs.writeFileSync(path.join(bin, 'launchctl'), `#!${process.execPath}
     require('node:fs').appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + '\\n');
@@ -40,7 +46,7 @@ function fixture(t, healthy) {
   const result = spawnSync(process.execPath, ['--import', preload, path.join(source, 'scripts/desktop.js'), 'install'], {
     env: { HOME: home, PATH: bin, DEEPSEEK_API_KEY: 'fixture-key' }, encoding: 'utf8',
   });
-  return { home, source, configPath, original, result, calls: fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse) };
+  return { home, source, configPath, original, result, calls: fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse) : [] };
 }
 
 test('installation builds a Node LaunchAgent and preserves unrelated configuration', t => {
@@ -54,7 +60,7 @@ test('installation builds a Node LaunchAgent and preserves unrelated configurati
   assert.equal(parsed.model_provider, 'opencodex');
   assert.equal(fs.readFileSync(report.backup, 'utf8'), original);
   assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap']);
-  const plist = path.join(home, 'Library/LaunchAgents/com.opencodex.router.plist');
+  const plist = path.join(home, 'Library/LaunchAgents/com.deepcodex.router.plist');
   const converted = spawnSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', plist], { encoding: 'utf8' });
   assert.equal(converted.status, 0, converted.stderr);
   const definition = JSON.parse(converted.stdout);
@@ -64,6 +70,21 @@ test('installation builds a Node LaunchAgent and preserves unrelated configurati
     env: { HOME: home, PATH: '' }, encoding: 'utf8',
   });
   assert.equal(runtime.status, 0, runtime.stderr);
+});
+
+test('installation uses the Desktop CLI without a codex command on PATH', t => {
+  const { result, calls } = fixture(t, true, { bundled: true });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).status, 'ready');
+  assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap']);
+});
+
+test('incompatible CLI explains the prerequisite failure before modifying configuration', t => {
+  const { configPath, original, result, calls } = fixture(t, true, { incompatible: true });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /DeepCodex prerequisites are not ready:.*incompatible.*--strict-config/);
+  assert.equal(fs.readFileSync(configPath, 'utf8'), original);
+  assert.deepEqual(calls, []);
 });
 
 test('unhealthy service leaves user configuration unchanged and stops the attempted service', t => {

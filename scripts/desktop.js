@@ -103,7 +103,7 @@ export async function install() {
   const env = workerEnvironment(process.env);
   loadCredentials(env, original);
   const diagnosis = doctor(original, env);
-  if (diagnosis.status !== 'ready') throw new Error('OpenCodex worker doctor must be ready before installation');
+  if (diagnosis.status !== 'ready') throw new Error(`DeepCodex prerequisites are not ready: ${diagnosis.errors.join(' ')}`);
   const configPath = path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'config.toml');
   const before = fs.readFileSync(configPath, 'utf8');
   const parsed = parseToml(before);
@@ -135,7 +135,7 @@ export async function install() {
     '': { model_provider: 'opencodex', model_catalog_json: path.join(STATE, 'models.json') },
     agents: { enabled: true, default_subagent_model: child.slug, default_subagent_reasoning_effort: 'high' },
     features: { multi_agent: true, multi_agent_v2: true },
-    'model_providers.opencodex': { name: 'OpenCodex', base_url: `http://127.0.0.1:${config.port}`, wire_api: 'responses',
+    'model_providers.opencodex': { name: 'DeepCodex', base_url: `http://127.0.0.1:${config.port}`, wire_api: 'responses',
       requires_openai_auth: true, supports_websockets: false, request_max_retries: 0, stream_max_retries: 0, stream_idle_timeout_ms: config.request_timeout_ms },
     'model_providers.opencodex.http_headers': { 'x-opencodex-pilot': capability },
   };
@@ -153,7 +153,7 @@ export async function install() {
   const domain = `gui/${process.getuid()}`;
   spawnSync('launchctl', ['bootout', `${domain}/${label}`]);
   const bootstrap = spawnSync('launchctl', ['bootstrap', domain, plist]);
-  if (bootstrap.error || bootstrap.status !== 0) throw new Error('Cannot start OpenCodex LaunchAgent');
+  if (bootstrap.error || bootstrap.status !== 0) throw new Error('Cannot start DeepCodex LaunchAgent');
   const deadline = Date.now() + config.startup_timeout_seconds * 1000;
   let report;
   while (!report) {
@@ -168,13 +168,13 @@ export async function install() {
   }
   if (fs.readFileSync(configPath, 'utf8') !== before) throw new Error('Codex config changed during installation; proposed config was not applied');
   privateWrite(configPath, updated);
-  console.log(JSON.stringify({ ...report, service: label, port: config.port, cwd: runtime, owner: 'OpenCodex LaunchAgent',
+  console.log(JSON.stringify({ ...report, service: label, port: config.port, cwd: runtime, owner: 'DeepCodex LaunchAgent',
     native_models: nativeModels.length, subagent_model: child.slug, backup: path.join(STATE, 'config.before.toml'), restart_desktop_required: true }));
 }
 
 export async function main(args = process.argv.slice(2)) {
   if (args.includes('--help') || args.includes('-h')) {
-    console.log('Usage: opencodex <install|status>\nActivate or inspect the local macOS Desktop router.');
+    console.log('Usage: deepcodex <install|status>\nActivate or inspect the local macOS Desktop router.');
     return 0;
   }
   if (args.length !== 1 || !['install', 'serve', 'status'].includes(args[0])) throw new Error('Expected install, serve or status');

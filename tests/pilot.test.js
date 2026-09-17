@@ -73,7 +73,7 @@ const WORKER_STUB = (root, codex, { failKill = false } = {}) => [
   "  return { codex: { model: 'deepseek-flash', model_provider: 'opencodex-deepseek', model_reasoning_effort: 'high',",
   '      features: { multi_agent: false, plugins: false },',
   "      model_providers: { 'opencodex-deepseek': { base_url: 'https://api.deepseek.com', env_key: 'DEEPSEEK_API_KEY' } } },",
-  "    model_metadata: { display_name: 'DeepSeek Flash (OpenCodex)' } };",
+  "    model_metadata: { display_name: 'DeepSeek Flash (DeepCodex)' } };",
   '}',
   'export function workerEnvironment(source) { return { ...source }; }',
   "export function loadCredentials(env, config) { env.DEEPSEEK_API_KEY = 'fake-test-key'; }",
@@ -265,7 +265,7 @@ test('run drives the fake Codex, assesses the receipts and removes the temporary
   assert.deepEqual(events.map((event) => event.event ?? event.status),
     ['pilot.router_started', 'passed', 'pilot.stopped', 'runner.listeners']);
   const [router, result, stopped, listeners] = events;
-  assert.equal(router.owner, 'OpenCodex isolated pilot');
+  assert.equal(router.owner, 'DeepCodex isolated pilot');
   assert.equal(router.cwd, path.join(router.artifacts, 'workspace'));
   assert.deepEqual(Object.keys(result.checks), ['parent_completed', 'native_spawn', 'deepseek_completed', 'tool_used',
     'file_values_returned', 'same_agent_followup', 'no_transport_errors']);

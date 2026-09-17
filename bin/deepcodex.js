@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 
 const args = process.argv.slice(2);
 const command = args.shift();
-const help = `Usage: opencodex <command>
+const help = `Usage: deepcodex <command>
 
 Commands:
   configure  Save the DeepSeek key using a hidden terminal prompt
@@ -13,11 +13,11 @@ Commands:
   run      Run an isolated worker ticket (consumes DeepSeek usage)
   pilot    Test native delegation (consumes Codex and DeepSeek usage)
 
-Requires macOS, Node.js >=22.15 and a compatible Codex CLI.
-Run opencodex configure to save the DeepSeek key in ~/.config/opencodex/.env.
+Requires macOS, Node.js >=22.15 and a compatible Codex CLI (PATH or Desktop bundle).
+Run deepcodex configure to save the DeepSeek key in ~/.config/opencodex/.env.
 Installing this npm package does not activate the router or install the skill
 in Codex. Install the plugin through a Codex marketplace to load its skill.
-Use opencodex <command> --help for command options.
+Use deepcodex <command> --help for command options.
 `;
 
 if (!command || command === '--help' || command === '-h') {
@@ -33,17 +33,17 @@ if (!command || command === '--help' || command === '-h') {
   }
   if (command === 'pilot' && args.length) {
     if (args.length === 1 && ['--help', '-h'].includes(args[0])) {
-      console.log('Usage: opencodex pilot\nRuns a live native delegation test; consumes Codex and DeepSeek usage.');
+      console.log('Usage: deepcodex pilot\nRuns a live native delegation test; consumes Codex and DeepSeek usage.');
       process.exit(0);
     }
-    console.error('Usage: opencodex pilot (no arguments)');
+    console.error('Usage: deepcodex pilot (no arguments)');
     process.exit(2);
   }
   try {
     const script = await import(new URL(`../scripts/${scripts[command]}`, import.meta.url));
     process.exitCode = command === 'pilot' ? await script.run() : await script.main([command, ...args]);
   } catch (error) {
-    console.error(`OpenCodex failed: ${error.message}`);
+    console.error(`DeepCodex failed: ${error.message}`);
     process.exitCode = 1;
   }
 }

@@ -6,13 +6,13 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-const CLI = fileURLToPath(new URL('../bin/opencodex.js', import.meta.url));
+const CLI = fileURLToPath(new URL('../bin/deepcodex.js', import.meta.url));
 
 function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'opencodex-cli-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (const dir of ['bin', 'scripts', 'work dir', 'empty-path']) fs.mkdirSync(path.join(root, dir));
-  fs.copyFileSync(CLI, path.join(root, 'bin/opencodex.js'));
+  fs.copyFileSync(CLI, path.join(root, 'bin/deepcodex.js'));
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version: '1.2.3', type: 'module' }));
   for (const name of ['desktop', 'worker', 'pilot', 'credentials']) {
     fs.writeFileSync(path.join(root, `scripts/${name}.js`), `
@@ -23,17 +23,26 @@ function fixture(t) {
       export async function run() { return main([]); }
     `);
   }
-  return args => spawnSync(process.execPath, [path.join(root, 'bin/opencodex.js'), ...args], {
+  return args => spawnSync(process.execPath, [path.join(root, 'bin/deepcodex.js'), ...args], {
     cwd: path.join(root, 'work dir'), env: { HOME: root, PATH: path.join(root, 'empty-path') }, encoding: 'utf8',
   });
 }
+
+test('package and plugin expose the DeepCodex name', () => {
+  const manifest = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const plugin = JSON.parse(fs.readFileSync(new URL('../.codex-plugin/plugin.json', import.meta.url), 'utf8'));
+  assert.equal(manifest.name, 'deepcodex');
+  assert.deepEqual(manifest.bin, { deepcodex: 'bin/deepcodex.js' });
+  assert.equal(plugin.name, 'deepcodex');
+  assert.equal(plugin.interface.displayName, 'DeepCodex');
+});
 
 test('help and version work with no external executables', t => {
   const run = fixture(t);
   for (const args of [[], ['--help'], ['-h'], ['pilot', '--help']]) {
     const result = run(args);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /Usage:/);
+    assert.match(result.stdout, /Usage: deepcodex/);
   }
   for (const flag of ['--version', '-v']) {
     const result = run([flag]);

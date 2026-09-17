@@ -1,24 +1,24 @@
 {
-  "name": "opencodex",
+  "name": "deepcodex",
   "version": "0.1.1",
   "description": "Delegates tasks to native DeepSeek Flash subagents inside Codex through a local router.",
   "author": {
-    "name": "OpenCodex"
+    "name": "DeepCodex"
   },
   "skills": "./skills/",
   "interface": {
-    "displayName": "OpenCodex",
+    "displayName": "DeepCodex",
     "shortDescription": "Astra coordinates; DeepSeek Flash executes.",
     "longDescription": "Keeps the coordinator model and connects DeepSeek Flash as a native subagent, with tracking, tools, and results inside Codex.",
-    "developerName": "OpenCodex",
+    "developerName": "DeepCodex",
     "category": "Productivity",
     "capabilities": [
       "Read",
       "Write"
     ],
     "defaultPrompt": [
-      "Check whether OpenCodex is ready.",
-      "Delegate this implementation to Flash with OpenCodex."
+      "Check whether DeepCodex is ready.",
+      "Delegate this implementation to Flash with DeepCodex."
     ]
   }
 }

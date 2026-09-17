@@ -223,7 +223,7 @@ export async function startPilot(config, deepseekKey, capability) {
         return;
       }
       receipt({ route: 'error', message: String(error.message).replaceAll(deepseekKey, '[REDACTED]').replaceAll(capability, '[REDACTED]') });
-      if (!response.headersSent) response.writeHead(502, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { message: 'OpenCodex request failed; inspect local receipts.' } }));
+      if (!response.headersSent) response.writeHead(502, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { message: 'DeepCodex request failed; inspect local receipts.' } }));
       else response.destroy();
     } finally { clearTimeout(timer); }
   });
