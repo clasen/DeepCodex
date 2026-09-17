@@ -39,7 +39,7 @@
     "sandbox_workspace_write": {"network_access": false}
   },
   "model_metadata": {
-    "display_name": "DeepSeek Flash (OpenCodex)",
+    "display_name": "DeepSeek Flash",
     "description": "Text worker using the direct DeepSeek API.",
     "default_reasoning_level": "high",
     "supported_reasoning_levels": [

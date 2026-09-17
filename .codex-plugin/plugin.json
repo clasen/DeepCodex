@@ -1,6 +1,6 @@
 {
   "name": "opencodex",
-  "version": "0.1.0+codex.20260917024812",
+  "version": "0.1.1",
   "description": "Delegates tasks to native DeepSeek Flash subagents inside Codex through a local router.",
   "author": {
     "name": "OpenCodex"

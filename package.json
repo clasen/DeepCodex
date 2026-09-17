@@ -1,6 +1,6 @@
 {
   "name": "deepcodex",
-  "version": "0.1.0+codex.20260917024812",
+  "version": "0.1.1",
   "description": "Native DeepSeek Flash subagents for Codex through a local router.",
   "license": "MIT",
   "keywords": [
