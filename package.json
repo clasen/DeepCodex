@@ -1,5 +1,5 @@
 {
-  "name": "opencodex",
+  "name": "deepcodex",
   "version": "0.1.0+codex.20260917024812",
   "description": "Native DeepSeek Flash subagents for Codex through a local router.",
   "license": "MIT",
@@ -17,7 +17,7 @@
   ],
   "type": "module",
   "bin": {
-    "opencodex": "bin/opencodex.js"
+    "deepcodex": "bin/opencodex.js"
   },
   "files": [
     "bin/*.js",
