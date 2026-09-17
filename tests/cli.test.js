@@ -53,7 +53,7 @@ test('help and version work with no external executables', t => {
 
 test('commands dispatch Node modules preserving arguments, cwd and exit status', t => {
   const run = fixture(t);
-  for (const [command, module] of [['configure', 'credentials'], ['install', 'desktop'], ['status', 'desktop'], ['doctor', 'worker'], ['run', 'worker'], ['pilot', 'pilot']]) {
+  for (const [command, module] of [['configure', 'credentials'], ['install', 'desktop'], ['uninstall', 'desktop'], ['status', 'desktop'], ['doctor', 'worker'], ['run', 'worker'], ['pilot', 'pilot']]) {
     const args = command === 'run' ? ['--cwd', 'a b', '--task-file', 'ticket file.md'] : [];
     const result = run([command, ...args]);
     assert.equal(result.status, 7, result.stderr);

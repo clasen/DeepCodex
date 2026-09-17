@@ -130,7 +130,7 @@ export async function install() {
     receipts: path.join(STATE, 'receipts.jsonl'), markers: [] });
   const statePath = path.join(STATE, 'state.json');
   const capability = fs.existsSync(statePath) ? readJson(statePath).capability : randomBytes(32).toString('base64url');
-  const state = { config, capability, node: process.execPath, runtime };
+  const state = { config, capability, node: process.execPath, runtime, configPath };
   const sections = {
     '': { model_provider: 'opencodex', model_catalog_json: path.join(STATE, 'models.json') },
     agents: { enabled: true, default_subagent_model: child.slug, default_subagent_reasoning_effort: 'high' },
@@ -172,13 +172,46 @@ export async function install() {
     native_models: nativeModels.length, subagent_model: child.slug, backup: path.join(STATE, 'config.before.toml'), restart_desktop_required: true }));
 }
 
+export function uninstall() {
+  if (process.platform !== 'darwin') throw new Error('The Desktop uninstaller requires macOS');
+  const statePath = path.join(STATE, 'state.json');
+  if (!fs.existsSync(statePath)) {
+    console.log(JSON.stringify({ status: 'not_installed' }));
+    return;
+  }
+  const state = readJson(statePath);
+  const configPath = state.configPath || path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'config.toml');
+  const before = fs.readFileSync(path.join(STATE, 'config.before.toml'), 'utf8');
+  const proposed = fs.readFileSync(path.join(STATE, 'config.proposed.toml'), 'utf8');
+  const current = fs.readFileSync(configPath, 'utf8');
+  if (current !== proposed && current !== before) {
+    throw new Error('Codex configuration changed after installation; uninstall stopped without changes. Reconcile config.toml with the backup and proposed config in ' + STATE);
+  }
+  const runtime = path.join(os.homedir(), '.local/share/opencodex/runtime');
+  if (state.runtime !== runtime) throw new Error('Unexpected router runtime path; uninstall stopped');
+  const label = readJson(path.join(ROOT, 'config/desktop.json')).service_label;
+  if (state.config.service_label !== label) throw new Error('Unexpected router service label; uninstall stopped');
+  const service = `gui/${process.getuid()}/${label}`;
+  // Restore connectivity before stopping the router; a failed stop can be retried.
+  if (current !== before) privateWrite(configPath, before);
+  const stopped = spawnSync('launchctl', ['bootout', service]);
+  if (stopped.error || (stopped.status !== 0 && stopped.status !== 3)) {
+    throw new Error('Cannot stop DeepCodex LaunchAgent; Codex settings restored, runtime retained. Retry uninstall.');
+  }
+  fs.rmSync(path.join(os.homedir(), 'Library/LaunchAgents', label + '.plist'), { force: true });
+  fs.rmSync(runtime, { recursive: true, force: true });
+  fs.rmSync(STATE, { recursive: true, force: true });
+  console.log(JSON.stringify({ status: 'uninstalled', restart_desktop_required: true, credentials_preserved: true }));
+}
+
 export async function main(args = process.argv.slice(2)) {
   if (args.includes('--help') || args.includes('-h')) {
-    console.log('Usage: deepcodex <install|status>\nActivate or inspect the local macOS Desktop router.');
+    console.log('Usage: deepcodex <install|uninstall|status>\nActivate or inspect the local macOS Desktop router.');
     return 0;
   }
-  if (args.length !== 1 || !['install', 'serve', 'status'].includes(args[0])) throw new Error('Expected install, serve or status');
+  if (args.length !== 1 || !['install', 'uninstall', 'serve', 'status'].includes(args[0])) throw new Error('Expected install, uninstall, serve or status');
   if (args[0] === 'install') await install();
+  else if (args[0] === 'uninstall') uninstall();
   else {
     const state = readJson(path.join(STATE, 'state.json'));
     if (args[0] === 'status') console.log(JSON.stringify({ ...await health(state), port: state.config.port, cwd: state.runtime }));

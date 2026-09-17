@@ -8,6 +8,7 @@ const help = `Usage: deepcodex <command>
 Commands:
   configure  Save the DeepSeek key using a hidden terminal prompt
   install  Activate the local macOS router and configure Codex
+  uninstall  Remove the local router and restore Codex settings
   status   Check the installed router without inference
   doctor   Check worker prerequisites without inference
   run      Run an isolated worker ticket (consumes DeepSeek usage)
@@ -26,7 +27,7 @@ if (!command || command === '--help' || command === '-h') {
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   console.log(manifest.version);
 } else {
-  const scripts = { configure: 'credentials.js', install: 'desktop.js', status: 'desktop.js', doctor: 'worker.js', run: 'worker.js', pilot: 'pilot.js' };
+  const scripts = { configure: 'credentials.js', install: 'desktop.js', uninstall: 'desktop.js', status: 'desktop.js', doctor: 'worker.js', run: 'worker.js', pilot: 'pilot.js' };
   if (!Object.hasOwn(scripts, command)) {
     console.error(`Unknown command: ${command}\n${help}`);
     process.exit(2);

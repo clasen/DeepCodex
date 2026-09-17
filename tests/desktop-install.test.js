@@ -94,3 +94,54 @@ test('unhealthy service leaves user configuration unchanged and stops the attemp
   assert.equal(fs.readFileSync(configPath, 'utf8'), original);
   assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap', 'bootout']);
 });
+
+function removeInstallation(fixture) {
+  return spawnSync(process.execPath, [path.join(fixture.source, 'scripts/desktop.js'), 'uninstall'], {
+    env: { HOME: fixture.home, PATH: path.join(path.dirname(fixture.home), 'bin') }, encoding: 'utf8',
+  });
+}
+
+test('uninstall restores config, removes runtime and service, preserves credentials and is repeatable', t => {
+  const installed = fixture(t, true);
+  assert.equal(installed.result.status, 0, installed.result.stderr);
+  const credentials = path.join(installed.home, '.config/opencodex/.env');
+  fs.writeFileSync(credentials, 'fixture-credential');
+  const result = removeInstallation(installed);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).status, 'uninstalled');
+  assert.equal(fs.readFileSync(installed.configPath, 'utf8'), installed.original);
+  assert.equal(fs.readFileSync(credentials, 'utf8'), 'fixture-credential');
+  for (const relative of ['.config/opencodex/desktop', '.local/share/opencodex/runtime', 'Library/LaunchAgents/com.deepcodex.router.plist']) {
+    assert.equal(fs.existsSync(path.join(installed.home, relative)), false);
+  }
+  const repeated = removeInstallation(installed);
+  assert.equal(repeated.status, 0, repeated.stderr);
+  assert.equal(JSON.parse(repeated.stdout).status, 'not_installed');
+});
+
+test('uninstall refuses changed config before stopping the service or deleting files', t => {
+  const installed = fixture(t, true);
+  const changed = fs.readFileSync(installed.configPath, 'utf8') + '\n# New user setting\n';
+  fs.writeFileSync(installed.configPath, changed);
+  const result = removeInstallation(installed);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /configuration changed/);
+  assert.equal(fs.readFileSync(installed.configPath, 'utf8'), changed);
+  assert.equal(fs.existsSync(path.join(installed.home, '.local/share/opencodex/runtime')), true);
+  const calls = fs.readFileSync(path.join(path.dirname(installed.home), 'launchctl.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap']);
+});
+
+test('failed service stop retains runtime and permits retry after config restoration', t => {
+  const installed = fixture(t, true);
+  const launchctl = path.join(path.dirname(installed.home), 'bin/launchctl');
+  fs.writeFileSync(launchctl, '#!/bin/sh\nexit 1\n');
+  const failed = removeInstallation(installed);
+  assert.equal(failed.status, 1);
+  assert.match(failed.stderr, /Cannot stop/);
+  assert.equal(fs.readFileSync(installed.configPath, 'utf8'), installed.original);
+  assert.equal(fs.existsSync(path.join(installed.home, '.local/share/opencodex/runtime')), true);
+  fs.writeFileSync(launchctl, '#!/bin/sh\nexit 3\n');
+  const retried = removeInstallation(installed);
+  assert.equal(retried.status, 0, retried.stderr);
+});

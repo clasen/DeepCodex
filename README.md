@@ -123,6 +123,7 @@ checkout is not a marketplace source by itself.
 | `deepcodex configure` | Prompt for the DeepSeek API key and write `~/.config/opencodex/.env`. |
 | `deepcodex doctor` | Check Codex CLI compatibility and credential presence without inference. |
 | `deepcodex install` | Install the router runtime, the LaunchAgent and the user-level Codex settings. |
+| `deepcodex uninstall` | Stop and remove the router, restoring the saved Codex configuration. Credentials are preserved. Refuses if config changed since installation. Restart Codex afterward; remove the npm package separately with `npm uninstall -g deepcodex`. |
 | `deepcodex status` | Query the installed router health endpoint without inference. |
 | `deepcodex run --cwd PATH --task-file PATH [--write]` | Run one bounded isolated worker ticket against DeepSeek. Read-only unless `--write` is given. |
 | `deepcodex pilot` | Run the opt-in live native-delegation test; consumes Codex and DeepSeek usage. |
