@@ -22,6 +22,7 @@
   "files": [
     "bin/*.js",
     ".codex-plugin/plugin.json",
+    "assets/deepcodex.png",
     "skills/delegate-flash/SKILL.md",
     "config/*.json",
     "prompts/worker.md",
