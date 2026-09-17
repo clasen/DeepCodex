@@ -50,13 +50,10 @@ is `com.deepcodex.router`. Existing private paths (`~/.config/opencodex`,
 `~/.local/share/opencodex`) and provider IDs are retained, reusing your saved
 key and backup.
 
-If the previous `com.opencodex.router` LaunchAgent is installed, unload it and
-remove its plist before running `deepcodex install` to avoid competing services:
-
-```sh
-launchctl bootout "gui/$(id -u)/com.opencodex.router"
-rm ~/Library/LaunchAgents/com.opencodex.router.plist
-```
+`deepcodex install` stops the previous `com.opencodex.router` LaunchAgent before
+starting the new service. After a successful installation, it moves the old
+plist into `~/.config/opencodex/desktop` so it cannot start a competing service
+at the next login.
 
 Run `deepcodex doctor` and `deepcodex install` to refresh the runtime; there is
 no need to run `configure` again if your key is already saved.
@@ -100,7 +97,10 @@ result confirms local prerequisites, not provider authentication or account cred
   `127.0.0.1:4207`;
 - updates `~/.codex/config.toml` with the local provider, the subagent defaults
   and the generated model catalog, keeping a pre-install backup at
-  `~/.config/opencodex/desktop/config.before.toml`.
+  `~/.config/opencodex/desktop/config.before.toml`;
+- registers and installs the bundled DeepCodex plugin in the personal marketplace,
+  including its current name, description, icon and delegation skill. An existing
+  local OpenCodex plugin in that marketplace is replaced after DeepCodex installs.
 
 The installer refuses to run when an unrelated custom provider is active or when
 an endpoint override is already configured, and it leaves your configuration
@@ -111,10 +111,11 @@ that were already open keep the provider and model catalog they started with.
 
 ## Plugin skill
 
-The delegation skill lives in `skills/delegate-flash/SKILL.md` and is loaded by
-installing the DeepCodex plugin through a Codex marketplace. Installing the npm
-package or running the commands above does not install the skill, and this
-checkout is not a marketplace source by itself.
+The delegation skill lives in `skills/delegate-flash/SKILL.md`. `deepcodex install`
+copies the plugin to `~/plugins/deepcodex`, registers it in
+`~/.agents/plugins/marketplace.json`, and installs it through the Codex CLI.
+Repeating the command refreshes the plugin cache even when the package version
+has not changed. Other personal marketplace entries are preserved.
 
 ## Commands
 
@@ -122,7 +123,7 @@ checkout is not a marketplace source by itself.
 | --- | --- |
 | `deepcodex configure` | Prompt for the DeepSeek API key and write `~/.config/opencodex/.env`. |
 | `deepcodex doctor` | Check Codex CLI compatibility and credential presence without inference. |
-| `deepcodex install` | Install the router runtime, the LaunchAgent and the user-level Codex settings. |
+| `deepcodex install` | Install the router runtime, LaunchAgent, Codex settings and current DeepCodex plugin. |
 | `deepcodex uninstall` | Stop and remove the router, restoring the saved Codex configuration. Credentials are preserved. Refuses if config changed since installation. Restart Codex afterward; remove the npm package separately with `npm uninstall -g deepcodex`. |
 | `deepcodex status` | Query the installed router health endpoint without inference. |
 | `deepcodex run --cwd PATH --task-file PATH [--write]` | Run one bounded isolated worker ticket against DeepSeek. Read-only unless `--write` is given. |

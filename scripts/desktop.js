@@ -11,6 +11,7 @@ import { parseToml } from './toml.js';
 import { startPilot } from './pilot-router.js';
 
 const STATE = path.join(os.homedir(), '.config/opencodex/desktop');
+const LSREGISTER = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
 const readJson = filename => JSON.parse(fs.readFileSync(filename, 'utf8'));
 const expandHome = filename => filename.startsWith('~/') ? path.join(os.homedir(), filename.slice(2)) : filename;
 
@@ -78,13 +79,84 @@ export function plistDocument(value) {
 
 export function copyRuntime(root, runtime) {
   fs.mkdirSync(runtime, { recursive: true, mode: 0o700 });
-  for (const directory of ['scripts', 'config', 'prompts', 'vendor']) {
+  for (const directory of ['scripts', 'config', 'prompts', 'vendor', '.codex-plugin', 'assets', 'skills']) {
     fs.cpSync(path.join(root, directory), path.join(runtime, directory), { recursive: true,
       filter: source => !['__pycache__', '.env', '.DS_Store'].includes(path.basename(source)) && !/\.py[cod]?$/.test(source) });
   }
   fs.copyFileSync(path.join(root, 'package.json'), path.join(runtime, 'package.json'));
   const dependency = path.dirname(path.dirname(fileURLToPath(import.meta.resolve('smol-toml'))));
   fs.cpSync(dependency, path.join(runtime, 'node_modules/smol-toml'), { recursive: true });
+}
+
+function registerServiceApp(app, action) {
+  const result = spawnSync(LSREGISTER, [action, app], { encoding: 'utf8' });
+  if (result.error || result.status !== 0) throw new Error(`Cannot ${action === '-u' ? 'unregister' : 'register'} DeepCodex app: ${result.error?.message || result.stderr.trim() || `lsregister exited ${result.status}`}`);
+}
+
+function createServiceApp(runtime, label) {
+  const app = path.join(runtime, 'DeepCodex.app');
+  const contents = path.join(app, 'Contents');
+  const executable = path.join(contents, 'MacOS/DeepCodex');
+  fs.mkdirSync(path.dirname(executable), { recursive: true });
+  fs.mkdirSync(path.join(contents, 'Resources'), { recursive: true });
+  const version = readJson(path.join(runtime, 'package.json')).version;
+  privateWrite(path.join(contents, 'Info.plist'), plistDocument({
+    CFBundleIdentifier: label, CFBundleName: 'DeepCodex', CFBundleDisplayName: 'DeepCodex',
+    CFBundleExecutable: 'DeepCodex', CFBundlePackageType: 'APPL', CFBundleIconFile: 'DeepCodex.icns',
+    CFBundleVersion: version, CFBundleShortVersionString: version, LSUIElement: true,
+  }));
+  const command = [process.execPath, path.join(runtime, 'scripts/desktop.js')]
+    .map(value => "'" + value.replaceAll("'", "'\\''") + "'").join(' ');
+  privateWrite(executable, `#!/bin/sh\nexec ${command} "$@"\n`);
+  fs.chmodSync(executable, 0o700);
+  const icon = spawnSync('/usr/bin/sips', ['-z', '512', '512', '-s', 'format', 'icns',
+    path.join(runtime, 'assets/deepcodex.png'), '--out', path.join(contents, 'Resources/DeepCodex.icns')], { encoding: 'utf8' });
+  if (icon.error || icon.status !== 0) throw new Error(`Cannot create DeepCodex app icon: ${icon.error?.message || icon.stderr.trim() || `sips exited ${icon.status}`}`);
+  registerServiceApp(app, '-f');
+  return executable;
+}
+
+export function installPlugin(root, codex, env) {
+  const home = env.HOME || os.homedir();
+  const marketplacePath = path.join(home, '.agents/plugins/marketplace.json');
+  const marketplace = fs.existsSync(marketplacePath) ? readJson(marketplacePath) : {
+    name: 'personal', interface: { displayName: 'Personal' }, plugins: [],
+  };
+  if (typeof marketplace.name !== 'string' || !/^[A-Za-z0-9_-]+$/.test(marketplace.name) || !Array.isArray(marketplace.plugins)) {
+    throw new Error('Invalid personal plugin marketplace');
+  }
+  const manifest = readJson(path.join(root, '.codex-plugin/plugin.json'));
+  if (manifest.name !== 'deepcodex' || typeof manifest.version !== 'string') throw new Error('Invalid DeepCodex plugin manifest');
+  const pluginPath = path.join(home, 'plugins', manifest.name);
+  copyRuntime(root, pluginPath);
+  manifest.version = `${manifest.version.split('+')[0]}+codex.${new Date().toISOString().replace(/\D/g, '')}`;
+  privateWrite(path.join(pluginPath, '.codex-plugin/plugin.json'), JSON.stringify(manifest, null, 2) + '\n');
+  const entry = {
+    name: manifest.name, source: { source: 'local', path: `./plugins/${manifest.name}` },
+    policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' }, category: manifest.interface.category,
+  };
+  const existing = marketplace.plugins.findIndex(plugin => plugin.name === manifest.name);
+  if (existing < 0) marketplace.plugins.push(entry);
+  else marketplace.plugins[existing] = { ...marketplace.plugins[existing], source: entry.source };
+  fs.mkdirSync(path.dirname(marketplacePath), { recursive: true });
+  privateWrite(marketplacePath, JSON.stringify(marketplace, null, 2) + '\n');
+  const run = (command, selector) => {
+    const result = spawnSync(codex, ['plugin', command, selector, '--json'], { env, encoding: 'utf8' });
+    if (result.error || result.status !== 0) throw new Error(`Cannot ${command} Codex plugin ${selector}; rerun deepcodex install after checking Codex plugin support`);
+    return JSON.parse(result.stdout);
+  };
+  const selector = `${manifest.name}@${marketplace.name}`;
+  const result = run('add', selector);
+  const configPath = path.join(env.CODEX_HOME || path.join(home, '.codex'), 'config.toml');
+  const config = parseToml(fs.readFileSync(configPath, 'utf8'));
+  const legacySelector = `opencodex@${marketplace.name}`;
+  if (Object.hasOwn(config.plugins || {}, legacySelector)) run('remove', legacySelector);
+  const legacy = marketplace.plugins.find(plugin => plugin.name === 'opencodex' && plugin.source?.source === 'local');
+  if (legacy) {
+    marketplace.plugins = marketplace.plugins.filter(plugin => plugin !== legacy);
+    privateWrite(marketplacePath, JSON.stringify(marketplace, null, 2) + '\n');
+  }
+  return result;
 }
 
 export async function health(state) {
@@ -104,6 +176,8 @@ export async function install() {
   loadCredentials(env, original);
   const diagnosis = doctor(original, env);
   if (diagnosis.status !== 'ready') throw new Error(`DeepCodex prerequisites are not ready: ${diagnosis.errors.join(' ')}`);
+  const pluginSupport = spawnSync(diagnosis.codex, ['plugin', 'add', '--help'], { env, encoding: 'utf8' });
+  if (pluginSupport.error || pluginSupport.status !== 0) throw new Error('Codex CLI must support plugin add; update Codex Desktop before installing DeepCodex');
   const configPath = path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'config.toml');
   const before = fs.readFileSync(configPath, 'utf8');
   const parsed = parseToml(before);
@@ -113,6 +187,7 @@ export async function install() {
   fs.chmodSync(STATE, 0o700);
   const runtime = path.join(os.homedir(), '.local/share/opencodex/runtime');
   copyRuntime(ROOT, runtime);
+  const executable = createServiceApp(runtime, config.service_label);
   let catalog;
   if (parsed.model_catalog_json && path.resolve(expandHome(parsed.model_catalog_json)) !== path.join(STATE, 'models.json')) {
     catalog = readJson(expandHome(parsed.model_catalog_json));
@@ -139,21 +214,28 @@ export async function install() {
       requires_openai_auth: true, supports_websockets: false, request_max_retries: 0, stream_max_retries: 0, stream_idle_timeout_ms: config.request_timeout_ms },
     'model_providers.opencodex.http_headers': { 'x-opencodex-pilot': capability },
   };
-  const updated = mergeConfig(before, sections);
+  let updated = mergeConfig(before, sections);
   privateWrite(path.join(STATE, 'config.proposed.toml'), updated);
   if (!fs.existsSync(path.join(STATE, 'config.before.toml'))) privateWrite(path.join(STATE, 'config.before.toml'), before);
   privateWrite(statePath, JSON.stringify(state));
   const label = config.service_label;
   const plist = path.join(os.homedir(), 'Library/LaunchAgents', label + '.plist');
   fs.mkdirSync(path.dirname(plist), { recursive: true });
-  privateWrite(plist, plistDocument({ Label: label, ProgramArguments: [process.execPath, path.join(runtime, 'scripts/desktop.js'), 'serve'],
+  privateWrite(plist, plistDocument({ Label: label, AssociatedBundleIdentifiers: [label], ProgramArguments: [executable, 'serve'],
     WorkingDirectory: runtime, RunAtLoad: true, KeepAlive: true, ThrottleInterval: config.service_throttle_seconds,
     StandardOutPath: path.join(STATE, 'service.log'), StandardErrorPath: path.join(STATE, 'service-errors.log'),
     EnvironmentVariables: { HOME: os.homedir(), PATH: env.PATH } }));
   const domain = `gui/${process.getuid()}`;
-  spawnSync('launchctl', ['bootout', `${domain}/${label}`]);
-  const bootstrap = spawnSync('launchctl', ['bootstrap', domain, plist]);
-  if (bootstrap.error || bootstrap.status !== 0) throw new Error('Cannot start DeepCodex LaunchAgent');
+  for (const serviceLabel of [config.previous_service_label, label]) {
+    const stopped = spawnSync('launchctl', ['bootout', `${domain}/${serviceLabel}`], { encoding: 'utf8' });
+    if (stopped.error || (stopped.status !== 0 && stopped.status !== 3)) {
+      throw new Error(`Cannot stop ${serviceLabel}: ${stopped.error?.message || stopped.stderr.trim() || `launchctl exited ${stopped.status}`}`);
+    }
+  }
+  const bootstrap = spawnSync('launchctl', ['bootstrap', domain, plist], { encoding: 'utf8' });
+  if (bootstrap.error || bootstrap.status !== 0) {
+    throw new Error(`Cannot start DeepCodex LaunchAgent: ${bootstrap.error?.message || bootstrap.stderr.trim() || `launchctl exited ${bootstrap.status}`}`);
+  }
   const deadline = Date.now() + config.startup_timeout_seconds * 1000;
   let report;
   while (!report) {
@@ -167,9 +249,20 @@ export async function install() {
     }
   }
   if (fs.readFileSync(configPath, 'utf8') !== before) throw new Error('Codex config changed during installation; proposed config was not applied');
+  let plugin;
+  try {
+    plugin = installPlugin(ROOT, diagnosis.codex, env);
+    updated = mergeConfig(fs.readFileSync(configPath, 'utf8'), sections);
+    privateWrite(path.join(STATE, 'config.proposed.toml'), updated);
+  } catch (error) {
+    spawnSync('launchctl', ['bootout', `${domain}/${label}`]);
+    throw error;
+  }
   privateWrite(configPath, updated);
+  const previousPlist = path.join(os.homedir(), 'Library/LaunchAgents', config.previous_service_label + '.plist');
+  if (fs.existsSync(previousPlist)) fs.renameSync(previousPlist, path.join(STATE, config.previous_service_label + '.plist'));
   console.log(JSON.stringify({ ...report, service: label, port: config.port, cwd: runtime, owner: 'DeepCodex LaunchAgent',
-    native_models: nativeModels.length, subagent_model: child.slug, backup: path.join(STATE, 'config.before.toml'), restart_desktop_required: true }));
+    native_models: nativeModels.length, subagent_model: child.slug, plugin, backup: path.join(STATE, 'config.before.toml'), restart_desktop_required: true }));
 }
 
 export function uninstall() {
@@ -199,6 +292,8 @@ export function uninstall() {
     throw new Error('Cannot stop DeepCodex LaunchAgent; Codex settings restored, runtime retained. Retry uninstall.');
   }
   fs.rmSync(path.join(os.homedir(), 'Library/LaunchAgents', label + '.plist'), { force: true });
+  const app = path.join(runtime, 'DeepCodex.app');
+  if (fs.existsSync(app)) registerServiceApp(app, '-u');
   fs.rmSync(runtime, { recursive: true, force: true });
   fs.rmSync(STATE, { recursive: true, force: true });
   console.log(JSON.stringify({ status: 'uninstalled', restart_desktop_required: true, credentials_preserved: true }));
