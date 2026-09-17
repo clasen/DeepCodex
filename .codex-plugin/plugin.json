@@ -8,6 +8,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "DeepCodex",
+    "composerIcon": "./assets/deepcodex.png",
+    "logo": "./assets/deepcodex.png",
     "shortDescription": "Astra coordinates; DeepSeek Flash executes.",
     "longDescription": "Keeps the coordinator model and connects DeepSeek Flash as a native subagent, with tracking, tools, and results inside Codex.",
     "developerName": "DeepCodex",
