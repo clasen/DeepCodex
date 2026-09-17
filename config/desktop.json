@@ -1,0 +1,9 @@
+{
+  "port": 4207,
+  "max_requests": null,
+  "request_timeout_ms": 300000,
+  "max_request_bytes": 134217728,
+  "max_response_bytes": 33554432,
+  "service_label": "com.opencodex.router",
+  "service_throttle_seconds": 10
+}

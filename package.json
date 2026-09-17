@@ -1,0 +1,48 @@
+{
+  "name": "opencodex",
+  "version": "0.1.0+codex.20260917024812",
+  "description": "Native DeepSeek Flash subagents for Codex through a local router.",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "deepseek",
+    "deepseek-flash",
+    "subagents",
+    "ai-agents",
+    "agent-orchestration",
+    "llm",
+    "router",
+    "cli",
+    "macos"
+  ],
+  "type": "module",
+  "bin": {
+    "opencodex": "bin/opencodex.js"
+  },
+  "files": [
+    "bin/*.js",
+    ".codex-plugin/plugin.json",
+    "skills/delegate-flash/SKILL.md",
+    "config/*.json",
+    "prompts/worker.md",
+    "scripts/*.js",
+    "vendor/codex-router/*.js",
+    "vendor/codex-router/LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "os": [
+    "darwin"
+  ],
+  "scripts": {
+    "test": "node --test --test-concurrency=1 tests/*.test.js"
+  },
+  "dependencies": {
+    "smol-toml": "1.8.0"
+  },
+  "bundleDependencies": [
+    "smol-toml"
+  ],
+  "packageManager": "pnpm@11.9.0"
+}
