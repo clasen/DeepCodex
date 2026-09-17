@@ -50,11 +50,6 @@ is `com.deepcodex.router`. Existing private paths (`~/.config/opencodex`,
 `~/.local/share/opencodex`) and provider IDs are retained, reusing your saved
 key and backup.
 
-`deepcodex install` stops the previous `com.opencodex.router` LaunchAgent before
-starting the new service. After a successful installation, it moves the old
-plist into `~/.config/opencodex/desktop` so it cannot start a competing service
-at the next login.
-
 Run `deepcodex doctor` and `deepcodex install` to refresh the runtime; there is
 no need to run `configure` again if your key is already saved.
 

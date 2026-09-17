@@ -8,7 +8,7 @@ import { copyRuntime } from '../scripts/desktop.js';
 import { parseToml } from '../scripts/toml.js';
 import { ROOT } from '../scripts/worker.js';
 
-function fixture(t, healthy, { bundled = false, incompatible = false, pluginFailure = false, noPluginSupport = false, legacy = false, legacyMarketplace = true, previousService = false, stopFailure = false, startFailure = false, registrationFailure = false } = {}) {
+function fixture(t, healthy, { bundled = false, incompatible = false, pluginFailure = false, noPluginSupport = false, legacy = false, legacyMarketplace = true, stopFailure = false, startFailure = false, registrationFailure = false } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'opencodex-install-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, "home & user's");
@@ -62,10 +62,6 @@ function fixture(t, healthy, { bundled = false, incompatible = false, pluginFail
     fs.mkdirSync(resources, { recursive: true });
     fs.renameSync(path.join(bin, 'codex'), path.join(resources, 'codex'));
   }
-  if (previousService) {
-    fs.mkdirSync(path.join(home, 'Library/LaunchAgents'), { recursive: true });
-    fs.writeFileSync(path.join(home, 'Library/LaunchAgents/com.opencodex.router.plist'), 'previous plist');
-  }
   const calls = path.join(root, 'launchctl.jsonl');
   fs.writeFileSync(path.join(bin, 'launchctl'), `#!${process.execPath}
     require('node:fs').appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + '\\n');
@@ -116,7 +112,7 @@ test('installation associates the LaunchAgent with a branded app that runs the c
   assert.deepEqual(fs.readFileSync(path.join(plugin, manifest.interface.logo)), fs.readFileSync(path.join(ROOT, manifest.interface.logo)));
   assert.equal(JSON.parse(result.stdout).plugin.pluginId, 'deepcodex@personal');
   assert.equal(fs.readFileSync(report.backup, 'utf8'), original);
-  assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootout', 'bootstrap']);
+  assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap']);
   const plist = path.join(home, 'Library/LaunchAgents/com.deepcodex.router.plist');
   const converted = spawnSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', plist], { encoding: 'utf8' });
   assert.equal(converted.status, 0, converted.stderr);
@@ -155,36 +151,32 @@ test('installation uses the Desktop CLI without a codex command on PATH', t => {
   const { result, calls } = fixture(t, true, { bundled: true });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).status, 'ready');
-  assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootout', 'bootstrap']);
+  assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap']);
 });
 
-test('installation stops both service names before starting and archives the previous plist', t => {
-  const { home, result, calls } = fixture(t, true, { previousService: true });
+test('installation stops the current service before starting it', t => {
+  const { home, result, calls } = fixture(t, true);
   assert.equal(result.status, 0, result.stderr);
   const domain = `gui/${process.getuid()}`;
-  assert.deepEqual(calls.slice(0, 2), [
-    ['bootout', `${domain}/com.opencodex.router`],
+  assert.deepEqual(calls, [
     ['bootout', `${domain}/com.deepcodex.router`],
+    ['bootstrap', domain, path.join(home, 'Library/LaunchAgents/com.deepcodex.router.plist')],
   ]);
-  assert.equal(calls[2][0], 'bootstrap');
-  assert.equal(fs.existsSync(path.join(home, 'Library/LaunchAgents/com.opencodex.router.plist')), false);
-  assert.equal(fs.readFileSync(path.join(home, '.config/opencodex/desktop/com.opencodex.router.plist'), 'utf8'), 'previous plist');
 });
 
 test('a failed service stop prevents bootstrap and reports the launchctl error', t => {
   const { result, configPath, original, calls } = fixture(t, true, { stopFailure: true });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /Cannot stop com.opencodex.router: Boot-out failed: 1: Operation not permitted/);
+  assert.match(result.stderr, /Cannot stop com.deepcodex.router: Boot-out failed: 1: Operation not permitted/);
   assert.equal(fs.readFileSync(configPath, 'utf8'), original);
   assert.deepEqual(calls.map(args => args[0]), ['bootout']);
 });
 
-test('a failed bootstrap reports its actual error and retains the previous plist', t => {
-  const { home, result, configPath, original } = fixture(t, true, { previousService: true, startFailure: true });
+test('a failed bootstrap reports its actual error and preserves configuration', t => {
+  const { result, configPath, original } = fixture(t, true, { startFailure: true });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Cannot start DeepCodex LaunchAgent: Bootstrap failed: 5: Input\/output error/);
   assert.equal(fs.readFileSync(configPath, 'utf8'), original);
-  assert.equal(fs.readFileSync(path.join(home, 'Library/LaunchAgents/com.opencodex.router.plist'), 'utf8'), 'previous plist');
 });
 
 test('incompatible CLI explains the prerequisite failure before modifying configuration', t => {
@@ -200,7 +192,7 @@ test('unhealthy service leaves user configuration unchanged and stops the attemp
   assert.equal(result.status, 1);
   assert.match(result.stderr, /did not become healthy/);
   assert.equal(fs.readFileSync(configPath, 'utf8'), original);
-  assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootout', 'bootstrap', 'bootout']);
+  assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap', 'bootout']);
 });
 
 test('missing plugin support fails before starting a service or changing user config', t => {
@@ -216,7 +208,7 @@ test('plugin install failure is reported and stops the attempted service', t => 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Cannot add Codex plugin/);
   assert.equal(fs.readFileSync(configPath, 'utf8'), original);
-  assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootout', 'bootstrap', 'bootout']);
+  assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap', 'bootout']);
 });
 
 test('installation replaces the legacy plugin and preserves unrelated marketplace entries', t => {
@@ -299,7 +291,7 @@ test('uninstall refuses changed config before stopping the service or deleting f
   assert.equal(fs.readFileSync(installed.configPath, 'utf8'), changed);
   assert.equal(fs.existsSync(path.join(installed.home, '.local/share/opencodex/runtime')), true);
   const calls = fs.readFileSync(path.join(path.dirname(installed.home), 'launchctl.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootout', 'bootstrap']);
+  assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap']);
 });
 
 test('failed service stop retains runtime and permits retry after config restoration', t => {

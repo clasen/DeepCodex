@@ -226,11 +226,9 @@ export async function install() {
     StandardOutPath: path.join(STATE, 'service.log'), StandardErrorPath: path.join(STATE, 'service-errors.log'),
     EnvironmentVariables: { HOME: os.homedir(), PATH: env.PATH } }));
   const domain = `gui/${process.getuid()}`;
-  for (const serviceLabel of [config.previous_service_label, label]) {
-    const stopped = spawnSync('launchctl', ['bootout', `${domain}/${serviceLabel}`], { encoding: 'utf8' });
-    if (stopped.error || (stopped.status !== 0 && stopped.status !== 3)) {
-      throw new Error(`Cannot stop ${serviceLabel}: ${stopped.error?.message || stopped.stderr.trim() || `launchctl exited ${stopped.status}`}`);
-    }
+  const stopped = spawnSync('launchctl', ['bootout', `${domain}/${label}`], { encoding: 'utf8' });
+  if (stopped.error || (stopped.status !== 0 && stopped.status !== 3)) {
+    throw new Error(`Cannot stop ${label}: ${stopped.error?.message || stopped.stderr.trim() || `launchctl exited ${stopped.status}`}`);
   }
   const bootstrap = spawnSync('launchctl', ['bootstrap', domain, plist], { encoding: 'utf8' });
   if (bootstrap.error || bootstrap.status !== 0) {
@@ -259,8 +257,6 @@ export async function install() {
     throw error;
   }
   privateWrite(configPath, updated);
-  const previousPlist = path.join(os.homedir(), 'Library/LaunchAgents', config.previous_service_label + '.plist');
-  if (fs.existsSync(previousPlist)) fs.renameSync(previousPlist, path.join(STATE, config.previous_service_label + '.plist'));
   console.log(JSON.stringify({ ...report, service: label, port: config.port, cwd: runtime, owner: 'DeepCodex LaunchAgent',
     native_models: nativeModels.length, subagent_model: child.slug, plugin, backup: path.join(STATE, 'config.before.toml'), restart_desktop_required: true }));
 }
