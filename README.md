@@ -30,7 +30,74 @@ encrypted task handoffs also require a native relay call. Actual savings depend
 on the delegated work and the coordinator's usage. See
 [Encrypted handoff relay](#encrypted-handoff-relay) for how that works.
 
-## Requirements
+## Get started
+
+### 1. Install Codex and sign in
+
+Install the desktop app using the [official setup guide](https://learn.chatgpt.com/docs/quickstart),
+open Codex and sign in with your ChatGPT account. Open a local project once to
+complete the initial setup. If you already use Codex, you can skip this step.
+
+On Windows or Linux, also install the [Codex CLI](https://learn.chatgpt.com/docs/codex/cli)
+and run `codex` once to sign in. On macOS, DeepCodex can use the CLI bundled with
+the desktop app.
+
+### 2. Get a DeepSeek API key
+
+Create an account at [DeepSeek Platform](https://platform.deepseek.com/),
+generate an API key and copy it for the next steps. Add API credit there if
+your balance is empty.
+
+### 3. Install DeepCodex globally
+
+Install [Node.js](https://nodejs.org/) 22.15 or newer, which includes npm, if you
+do not already have it. In a terminal, run:
+
+```sh
+npm install --global deepcodex
+```
+
+Use the same operating-system user that runs Codex. The commands work in a POSIX
+shell, PowerShell or Command Prompt, from any directory.
+
+### 4. Save your API key
+
+```sh
+deepcodex configure
+```
+
+When prompted, paste the DeepSeek API key from step 2 and press Enter. The input
+is hidden. DeepCodex saves the key in `~/.config/deepcodex/.env` for the router
+to use; you do not need to edit a configuration file.
+
+### 5. Activate DeepCodex
+
+```sh
+deepcodex install
+```
+
+This checks your setup, starts the local router and installs the Codex plugin.
+It configures DeepSeek Flash for delegation while keeping your selected native
+model as coordinator. If a prerequisite is missing, the command reports it.
+
+### 6. Restart Codex and start a new task
+
+Fully quit and reopen the desktop app, or exit and restart the Codex CLI. Start
+a new task so it picks up the updated provider and model catalog.
+
+Check that the local router is running:
+
+```sh
+deepcodex status
+```
+
+This checks the service without running inference. Existing tasks keep their
+original settings.
+
+<details>
+<summary>Installation details and troubleshooting</summary>
+
+### Platform and CLI compatibility
 
 - macOS, Linux with a running systemd user session, or Windows with PowerShell
   and Task Scheduler. Install as the user who runs Codex. WSL uses the Linux
@@ -48,35 +115,14 @@ on the delegated work and the coordinator's usage. See
   `codex exec` must support `--ignore-user-config`, `--ephemeral`, `--json`
   and `--strict-config`; `deepcodex doctor` verifies this before activation.
   A CLI on `PATH` takes priority, even if it is incompatible.
-- A DeepSeek API key.
 
 The default router port is `4207`; only one router can use it on a machine.
 
-## Install globally
-
-Once the package is published to npm:
-
-```sh
-npm install --global deepcodex
-deepcodex configure
-deepcodex doctor
-deepcodex install
-```
-
 The global installation adds `deepcodex` to npm's global bin directory, which
-must be on your `PATH`. Run it from any directory; no checkout path is needed.
-The same commands work in a POSIX shell, PowerShell or Command Prompt. In paths
-below, `~` means your home directory (`%USERPROFILE%` on Windows).
+must be on your `PATH`. In paths below, `~` means your home directory
+(`%USERPROFILE%` on Windows).
 
-To install the local checkout globally before publication, run these commands
-from the repository, then use the same `deepcodex` commands above:
-
-```sh
-pnpm install --frozen-lockfile
-npm install --global .
-```
-
-### 1. `deepcodex configure`
+### Credential storage
 
 `configure` asks for the DeepSeek API key with hidden input on the terminal and
 stores it in `~/.config/deepcodex/.env`. It creates the directory with mode
@@ -94,16 +140,20 @@ the file, as does the installed desktop service. Credentials stay outside the
 repository. The file permissions restrict other users, but programs running as
 your user can still read it.
 
-### 2. `deepcodex doctor`
+### Checking prerequisites
+
+```sh
+deepcodex doctor
+```
 
 `doctor` checks the local prerequisites without running inference: that a
 compatible Codex CLI is reachable and that the DeepSeek credential is present.
-Run it after `configure` and before `install`; `install` refuses to continue
-unless the doctor reports `ready`.
+Run it separately when troubleshooting; `install` runs these checks automatically
+and refuses to continue unless the doctor reports `ready`.
 Neither `configure` nor `doctor` contacts DeepSeek to validate the key. A `ready`
 result confirms local prerequisites, not provider authentication or account credit.
 
-### 3. `deepcodex install`
+### What installation changes
 
 `install` activates the desktop integration:
 
@@ -129,8 +179,18 @@ The installer refuses to run when an unrelated custom provider is active or when
 an endpoint override is already configured, and it leaves your configuration
 untouched if the service does not become healthy.
 
-After `install`, fully quit and reopen Codex Desktop and start a new task. Tasks
-that were already open keep the provider and model catalog they started with.
+### Installing from a checkout
+
+From the repository, run:
+
+```sh
+pnpm install --frozen-lockfile
+npm install --global .
+```
+
+Then continue from step 4 above.
+
+</details>
 
 ## Plugin skill
 
