@@ -6,12 +6,24 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { killProcessTree, resolveExecutable, spawnPlan } from './platform.js';
+import { ensurePrivateDirectory, privateOpen } from './private-files.js';
 import { parseToml } from './toml.js';
 
 export const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 const SQLITE_BUSY = 5;
-const ALLOWED_ENVIRONMENT = new Set(['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'CODEX_HOME']);
+const ALLOWED_ENVIRONMENT = new Set(['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TEMP', 'TMP', 'LANG',
+  'CODEX_HOME', 'XDG_CONFIG_HOME',
+  // Windows: the shell and the Codex CLI need these to start and to find the user profile.
+  'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',
+  'PROGRAMDATA', 'USERNAME']);
+
+// Windows environment names are case-insensitive, but its own tools and the DeepCodex service read
+// exact spellings (env.SystemRoot), so forwarded Windows variables keep the spelling the OS uses.
+const WINDOWS_ENVIRONMENT_CASE = new Map([
+  ['SYSTEMROOT', 'SystemRoot'], ['COMSPEC', 'ComSpec'], ['WINDIR', 'windir'], ['PROGRAMDATA', 'ProgramData'],
+]);
 const REQUIRED_CLI_FLAGS = ['--ignore-user-config', '--ephemeral', '--json', '--strict-config'];
 const USAGE = 'Usage: worker.js <doctor|run> [options]';
 
@@ -50,7 +62,15 @@ export function workerEnvironment(source) {
   const env = {};
   for (const [key, value] of Object.entries(source)) {
     if (value === undefined) continue;
-    if (ALLOWED_ENVIRONMENT.has(key) || key.startsWith('LC_')) env[key] = value;
+    if (key.startsWith('LC_')) {
+      env[key] = value;
+      continue;
+    }
+    // Windows environment names are case-insensitive, so the allowlist matches regardless of the
+    // spelling the platform reports and every forwarded name is normalised, except where the OS has
+    // its own spelling (SystemRoot, ComSpec, windir, ProgramData).
+    const name = key.toUpperCase();
+    if (ALLOWED_ENVIRONMENT.has(name)) env[WINDOWS_ENVIRONMENT_CASE.get(name) ?? name] = value;
   }
   if (source.DEEPSEEK_API_KEY) env.DEEPSEEK_API_KEY = source.DEEPSEEK_API_KEY;
   return env;
@@ -103,11 +123,11 @@ export function redact(value, secret) {
 export function resolveCodex(env, { platform = process.platform, applicationDirs = [
   path.join(env.HOME || os.homedir(), 'Applications'), '/Applications',
 ] } = {}) {
-  const binary = which('codex', env.PATH);
+  const binary = resolveExecutable('codex', { searchPath: env.PATH, platform, pathext: env.PATHEXT });
   if (binary || platform !== 'darwin') return binary;
   for (const directory of applicationDirs) {
     for (const app of ['Codex.app', 'ChatGPT.app']) {
-      const bundled = which('codex', path.join(directory, app, 'Contents', 'Resources'));
+      const bundled = resolveExecutable('codex', { searchPath: path.join(directory, app, 'Contents', 'Resources'), platform });
       if (bundled) return bundled;
     }
   }
@@ -149,20 +169,15 @@ export function checkProjectConfig(cwd) {
 }
 
 // Exclusive lock released by the kernel when the process dies, so a crashed worker cannot block the
-// next one. The lock file lives in the per-user temporary directory, is created without following
-// symlinks, is owned by this user and stays 0600. node:sqlite is loaded here so help and doctor stay
-// free of its experimental warning.
-export async function workerLock() {
-  const file = path.join(os.tmpdir(), `deepcodex-worker-${process.getuid()}.lock`);
-  const fd = fs.openSync(file, fs.constants.O_CREAT | fs.constants.O_RDWR | fs.constants.O_NOFOLLOW, 0o600);
-  try {
-    const stat = fs.fstatSync(fd);
-    if (stat.uid !== process.getuid()) throw new Error('Worker lock belongs to another user');
-    if (!stat.isFile()) throw new Error('Worker lock is not a regular file');
-    if ((stat.mode & 0o777) !== 0o600) fs.fchmodSync(fd, 0o600);
-  } finally {
-    fs.closeSync(fd);
-  }
+// next one. The lock file lives in the per-user temporary directory and is opened owner-only, which
+// private-files.js implements with POSIX bits and a Windows ACL. Windows has no uid, so its lock name
+// is per-user anyway because the temporary directory already is. node:sqlite is loaded here so help
+// and doctor stay free of its experimental warning.
+export async function workerLock({ platform = process.platform, uid = process.getuid?.(), ...privateOptions } = {}) {
+  const owner = platform === 'win32' ? 'user' : uid;
+  const file = path.join(os.tmpdir(), `deepcodex-worker-${owner}.lock`);
+  const fd = privateOpen(file, { ...privateOptions, platform, flags: fs.constants.O_CREAT | fs.constants.O_RDWR });
+  fs.closeSync(fd);
   const { DatabaseSync } = await import('node:sqlite');
   const database = new DatabaseSync(file, { timeout: 0 });
   try {
@@ -256,18 +271,8 @@ export function parseResult(stdout, stderr, finalText, returncode, stopReason, c
   return result;
 }
 
-// Codex runs in its own process group, so signalling the group also reaches descendants it left behind.
-export async function killGroup(child) {
-  if (!child || child.pid === undefined) return;
-  try {
-    process.kill(-child.pid, 'SIGKILL');
-  } catch (error) {
-    if (error.code !== 'ESRCH') throw error;
-  }
-  if (child.exitCode === null && child.signalCode === null) {
-    await new Promise(resolve => child.once('close', resolve));
-  }
-}
+// Kept as the worker's public name; the platform module owns the POSIX/Windows differences.
+export const killGroup = killProcessTree;
 
 export async function runWorker(binary, config, cwd, task, write, env) {
   checkProjectConfig(cwd);
@@ -276,7 +281,7 @@ export async function runWorker(binary, config, cwd, task, write, env) {
   const lock = await workerLock();
   let runDir = null;
   try {
-    runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-run-'));
+    runDir = ensurePrivateDirectory(fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-run-')));
     const { args, finalPath } = buildCommand(binary, config, cwd, write, runDir);
     const taskPath = path.join(runDir, 'task.txt');
     const outPath = path.join(runDir, 'events.jsonl');
@@ -290,7 +295,8 @@ export async function runWorker(binary, config, cwd, task, write, env) {
     const stderr = fs.openSync(errPath, 'w');
     try {
       // spawn() supplies argv[0] itself, so args[0] (the binary) must not be repeated in the list.
-      child = spawn(binary, args.slice(1), { cwd, env, detached: true, stdio: [stdin, stdout, stderr] });
+      const plan = spawnPlan(binary, args.slice(1), { env });
+      child = spawn(plan.file, plan.args, { cwd, env, detached: true, stdio: [stdin, stdout, stderr], ...plan.options });
       await waitForSpawn(child);
       process.stderr.write(`${JSON.stringify({ event: 'worker.started', pid: child.pid, cwd, model: config.codex.model })}\n`);
       while (child.exitCode === null && child.signalCode === null) {
@@ -309,11 +315,14 @@ export async function runWorker(binary, config, cwd, task, write, env) {
         await pause(limits.poll_interval_seconds * 1000);
       }
     } finally {
-      // Also terminate descendants left behind after Codex exits.
-      await killGroup(child);
-      fs.closeSync(stdin);
-      fs.closeSync(stdout);
-      fs.closeSync(stderr);
+      try {
+        // Also terminate descendants left behind after Codex exits.
+        await killGroup(child);
+      } finally {
+        fs.closeSync(stdin);
+        fs.closeSync(stdout);
+        fs.closeSync(stderr);
+      }
     }
     if (artifactBytes(artifacts) > limits.max_output_bytes) stopReason ??= 'output_limit';
     const returncode = child ? exitCodeOf(child) : null;
@@ -433,7 +442,8 @@ function readTicket(file, maxTaskBytes) {
 }
 
 function probe(args, env, timeout) {
-  const result = spawnSync(args[0], args.slice(1), { env, timeout, encoding: 'utf8' });
+  const plan = spawnPlan(args[0], args.slice(1), { env });
+  const result = spawnSync(plan.file, plan.args, { env, timeout, encoding: 'utf8', ...plan.options });
   if (result.error) throw result.error;
   return { status: result.status, stdout: result.stdout ?? '' };
 }
@@ -476,23 +486,6 @@ function artifactBytes(files) {
   return total;
 }
 
-function which(command, searchPath) {
-  const directories = String(searchPath ?? process.env.PATH ?? '').split(path.delimiter);
-  for (const directory of directories) {
-    const candidate = path.join(directory || '.', command);
-    try {
-      const stat = fs.statSync(candidate);
-      if (stat.isFile()) {
-        fs.accessSync(candidate, fs.constants.X_OK);
-        return candidate;
-      }
-    } catch {
-      // Not a usable candidate; keep searching.
-    }
-  }
-  return undefined;
-}
-
 function ancestors(cwd) {
   const directories = [];
   let directory = cwd;
@@ -504,9 +497,15 @@ function ancestors(cwd) {
   return directories;
 }
 
+// Windows keeps HOME only in POSIX-style shells, so the profile is resolved there the same way the
+// credentials writer and the Codex CLI resolve it.
+function homeDirectory() {
+  return process.platform === 'win32' ? os.homedir() : process.env.HOME ?? os.homedir();
+}
+
 function expandUser(file) {
-  if (file === '~') return process.env.HOME ?? os.homedir();
-  if (file.startsWith('~/')) return path.join(process.env.HOME ?? os.homedir(), file.slice(2));
+  if (file === '~') return homeDirectory();
+  if (file.startsWith('~/')) return path.join(homeDirectory(), file.slice(2));
   return file;
 }
 

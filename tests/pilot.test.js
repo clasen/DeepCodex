@@ -8,7 +8,14 @@ import { fileURLToPath } from 'node:url';
 import { assess, authFile, execArgs, run } from '../scripts/pilot.js';
 
 const PILOT = fileURLToPath(new URL('../scripts/pilot.js', import.meta.url));
+const PLATFORM = fileURLToPath(new URL('../scripts/platform.js', import.meta.url));
+const PRIVATE_FILES = fileURLToPath(new URL('../scripts/private-files.js', import.meta.url));
 const markers = ['first', 'second'];
+
+// The harness fixtures are POSIX shebang scripts and the cleanup assertions rely on POSIX process
+// groups, so the end-to-end pilot tests are skipped on Windows with an explicit reason instead of
+// failing there.
+const POSIX_FIXTURES = { skip: process.platform === 'win32' && 'POSIX shebang fixtures and process groups' };
 
 // Fake Codex: answers the catalog probe, records the argv it was spawned with, then either completes a
 // turn with JSONL on stdout or hangs so the pilot has to kill its process group.
@@ -112,6 +119,8 @@ function harness(t, { mode = 'complete', auth = true, vanish = false, failKill =
   }
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ type: 'module' }));
   fs.copyFileSync(PILOT, path.join(root, 'scripts/pilot.js'));
+  fs.copyFileSync(PLATFORM, path.join(root, 'scripts/platform.js'));
+  fs.copyFileSync(PRIVATE_FILES, path.join(root, 'scripts/private-files.js'));
   fs.writeFileSync(path.join(root, 'scripts/worker.js'), WORKER_STUB(root, box.codex, { failKill }));
   fs.writeFileSync(path.join(root, 'scripts/pilot-router.js'), FAKE_ROUTER);
   fs.writeFileSync(path.join(root, 'runner.js'), RUNNER);
@@ -256,7 +265,7 @@ test('codex exec argv keeps the executable out of the argument list', () => {
       '--sandbox', 'read-only', '--cd', '/tmp/run/workspace', '--output-last-message', '/tmp/run/final.txt', '-']);
 });
 
-test('run drives the fake Codex, assesses the receipts and removes the temporary login', async (t) => {
+test('run drives the fake Codex, assesses the receipts and removes the temporary login', POSIX_FIXTURES, async (t) => {
   const box = harness(t);
   const started = Date.now();
   const { code, stderr, events } = await collect(launch(box), 15000);
@@ -294,7 +303,7 @@ test('run drives the fake Codex, assesses the receipts and removes the temporary
   assert.deepEqual([box.alive(records[0].pid), box.alive(box.pids()[0])], [false, false]);
 });
 
-test('SIGINT stops both process groups and removes the temporary login without waiting for the timeout', async (t) => {
+test('SIGINT stops both process groups and removes the temporary login without waiting for the timeout', POSIX_FIXTURES, async (t) => {
   const box = harness(t, { mode: 'hang' });
   const pilot = launch(box);
   t.after(() => pilot.kill('SIGKILL'));
@@ -312,7 +321,7 @@ test('SIGINT stops both process groups and removes the temporary login without w
   assert.equal(box.alive(box.pids()[0]), false);
 });
 
-test('a missing login fails through the module entry point before anything is spawned', async (t) => {
+test('a missing login fails through the module entry point before anything is spawned', POSIX_FIXTURES, async (t) => {
   const box = harness(t, { auth: false });
   const { code, stderr, events } = await collect(launch(box, 'scripts/pilot.js'), 15000);
   assert.notEqual(code, 0);
@@ -322,7 +331,7 @@ test('a missing login fails through the module entry point before anything is sp
   assert.equal(fs.existsSync(box.routerLog), false);
 });
 
-test('a Codex that cannot be spawned still stops the router and removes the temporary login', async (t) => {
+test('a Codex that cannot be spawned still stops the router and removes the temporary login', POSIX_FIXTURES, async (t) => {
   const box = harness(t, { vanish: true });
   const { code, stderr, events } = await collect(launch(box), 15000);
   assert.notEqual(code, 0);
@@ -333,7 +342,7 @@ test('a Codex that cannot be spawned still stops the router and removes the temp
   assert.equal(box.alive(box.pids()[0]), false);
 });
 
-test('a failing child cleanup still stops the router and removes the temporary login', async (t) => {
+test('a failing child cleanup still stops the router and removes the temporary login', POSIX_FIXTURES, async (t) => {
   const box = harness(t, { failKill: true });
   const { code, events } = await collect(launch(box), 15000);
   assert.notEqual(code, 0);

@@ -13,6 +13,22 @@ const CLI = fileURLToPath(new URL('../bin/deepcodex.js', import.meta.url));
 const NAME = 'DEEPSEEK_API_KEY';
 const WINDOWS_SID = 'S-1-5-21-999999999-888888888-777777777-1001';
 const WINDOWS_ACCOUNT = 'DESKTOP-TEST\\tester';
+const POSIX = process.platform !== 'win32';
+const SKIP_POSIX = POSIX ? false : 'POSIX permission bits do not apply on this platform';
+
+function canSymlink() {
+  const probe = fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-symlink-probe-'));
+  try {
+    fs.symlinkSync(probe, path.join(probe, 'link'), 'dir');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probe, { recursive: true, force: true });
+  }
+}
+
+const SKIP_SYMLINKS = canSymlink() ? false : 'creating symlinks is not permitted on this host';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-credentials-'));
@@ -40,7 +56,8 @@ function windowsExec() {
       const [target, ...rest] = args;
       if (rest.length) {
         const grant = rest.at(-1);
-        acl.set(target, `${WINDOWS_ACCOUNT}:${grant.slice(grant.indexOf(':') + 1)}`);
+        const granted = grant.slice(grant.indexOf(':') + 1).replace(/([A-Z]+)$/, '($1)');
+        acl.set(target, `${WINDOWS_ACCOUNT}:${granted}`);
         return { status: 0, stdout: `processed file: ${target}\r\n`, stderr: '' };
       }
       return { status: 0, stdout: `${target} ${acl.get(target) ?? `${WINDOWS_ACCOUNT}:(I)(F)`}\r\n`, stderr: '' };
@@ -72,7 +89,7 @@ test('cancelled, empty, or invalid entry fails without echoing the secret', asyn
   }
 });
 
-test('credential creation and rotation preserve unrelated entries and private permissions', t => {
+test('credential creation and rotation preserve unrelated entries and private permissions', { skip: SKIP_POSIX }, t => {
   const root = fixture(t);
   const file = path.join(root, 'credentials/.env');
   saveCredentials(file, NAME, 'fixture-first');
@@ -88,7 +105,7 @@ test('credential creation and rotation preserve unrelated entries and private pe
   assert.deepEqual(fs.readdirSync(path.dirname(file)), ['.env']);
 });
 
-test('symlink files and directories cannot redirect credential writes', t => {
+test('symlink files and directories cannot redirect credential writes', { skip: SKIP_SYMLINKS }, t => {
   const root = fixture(t);
   const target = path.join(root, 'target');
   fs.writeFileSync(target, 'unchanged');
@@ -109,7 +126,7 @@ test('Windows credential writes restrict the directory and the file to the curre
   const { exec, calls } = windowsExec();
   saveCredentials(file, NAME, 'fixture-windows', { platform: 'win32', exec });
   assert.equal(readEnvKey(file, NAME), 'fixture-windows');
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  if (POSIX) assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   const icacls = calls.filter(([command]) => command === 'icacls');
   const grants = icacls.filter(call => call.includes('/inheritance:r')).map(call => [call[1], call.at(-1)]);
   assert.deepEqual(grants[0], [directory, `*${WINDOWS_SID}:(OI)(CI)F`]);

@@ -1,11 +1,13 @@
 // Run the opt-in live native-subagent pilot; consumes Codex and DeepSeek usage.
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, closeSync, copyFileSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync,
-  rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, statSync,
+  writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { spawnPlan } from './platform.js';
+import { ensurePrivateDirectory, privateWrite } from './private-files.js';
 import { ROOT, configArgs, doctor, killGroup, loadConfig, loadCredentials, workerEnvironment } from './worker.js';
 
 export function assess(receipts, markers, returncode, events) {
@@ -45,7 +47,8 @@ function jsonLines(file) {
 }
 
 function capture(command, args) {
-  const result = spawnSync(command, args, { encoding: 'utf8' });
+  const plan = spawnPlan(command, args);
+  const result = spawnSync(plan.file, plan.args, { encoding: 'utf8', ...plan.options });
   if (result.error) throw result.error;
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(' ')} exited with ${result.status}: ${result.stderr}`);
@@ -125,10 +128,10 @@ export async function run() {
   if (!statSync(authSource, { throwIfNoEntry: false })?.isFile()) {
     throw new Error('Pilot requires the existing Codex auth.json login');
   }
-  const runDir = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'deepcodex-pilot-')));
+  const runDir = ensurePrivateDirectory(realpathSync(mkdtempSync(path.join(os.tmpdir(), 'deepcodex-pilot-'))));
   const home = path.join(runDir, 'codex-home');
   const workspace = path.join(runDir, 'workspace');
-  mkdirSync(home, { mode: 0o700, recursive: true });
+  ensurePrivateDirectory(home);
   mkdirSync(workspace);
   const markers = [randomBytes(16).toString('hex'), randomBytes(16).toString('hex')];
   ['first.txt', 'second.txt'].forEach((filename, index) => {
@@ -148,8 +151,8 @@ export async function run() {
   const started = performance.now() / 1000;
   const signals = captureSignals();
   try {
-    copyFileSync(authSource, path.join(home, 'auth.json'));
-    chmodSync(path.join(home, 'auth.json'), 0o600);
+    // The isolated login is a credential copy, so it is written owner-only on every platform.
+    privateWrite(path.join(home, 'auth.json'), readFileSync(authSource, 'utf8'));
     const native = JSON.parse(capture(diagnosis.codex, ['debug', 'models', '--bundled']));
     const parent = (native.models ?? []).find((model) => model.slug === config.parent_model);
     if (!parent) throw new Error(`Native model catalog has no ${config.parent_model}`);
@@ -187,8 +190,7 @@ export async function run() {
       } };
       const flat = configArgs(values);
       const configPath = path.join(home, 'config.toml');
-      writeFileSync(configPath, `${flat.filter((_, index) => index % 2 === 1).join('\n')}\n`);
-      chmodSync(configPath, 0o600);
+      privateWrite(configPath, `${flat.filter((_, index) => index % 2 === 1).join('\n')}\n`);
       delete env.DEEPSEEK_API_KEY;
       const prompt = `Run this authorized native subagent integration test. Spawn exactly one agent named flash, `
         + `model=${config.child_model}, fork_turns=none, reasoning_effort=high. Its first task is: `
@@ -202,8 +204,9 @@ export async function run() {
       const errorsFd = openSync(path.join(runDir, 'codex-errors.txt'), 'w');
       let returncode;
       try {
-        child = spawn(diagnosis.codex, execArgs(workspace, runDir),
-          { env, cwd: workspace, stdio: ['pipe', eventsFd, errorsFd], detached: true });
+        const codex = spawnPlan(diagnosis.codex, execArgs(workspace, runDir), { env });
+        child = spawn(codex.file, codex.args,
+          { env, cwd: workspace, stdio: ['pipe', eventsFd, errorsFd], detached: true, ...codex.options });
         child.stdin.on('error', () => {});
         child.stdin.end(prompt);
         returncode = await waitForExit(child, config.timeout_seconds * 1000, signals.signal);

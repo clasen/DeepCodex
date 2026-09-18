@@ -70,7 +70,7 @@ export function saveCredentials(file, name, secret, options = {}) {
     lines.push(assignment, '');
   }
   const temporary = path.join(directory, `.credentials-${randomUUID()}.tmp`);
-  privateWrite(file, lines.join('\n'), { ...options, temporary, exclusive: true });
+  privateWrite(file, lines.join('\n'), { ...options, temporary });
 }
 
 export async function main(args) {

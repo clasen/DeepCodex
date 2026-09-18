@@ -22,6 +22,30 @@ after(() => {
 
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
+// The fixture binary is a POSIX shebang script. Windows cannot execute it without a real .exe/.cmd
+// shim, and that shim cannot be verified on this host, so the tests that run it are skipped there
+// with an explicit reason instead of failing.
+const POSIX_FIXTURE = { skip: process.platform === 'win32' && 'the fixture is a POSIX shebang script' };
+
+const WINDOWS_IDENTITY = { name: 'DESKTOP-TEST\\tester', sid: 'S-1-5-21-1111111111-2222222222-3333333333-1001' };
+
+// Minimal stand-in for whoami and icacls, so the Windows branch of private-files.js can run on a
+// POSIX host: the lock only needs an identity and an ACL reply that grants it.
+function windowsCommands() {
+  const acl = new Map();
+  return (command, args = []) => {
+    if (command === 'whoami') {
+      return { status: 0, stdout: `"${WINDOWS_IDENTITY.name}","${WINDOWS_IDENTITY.sid}"\r\n`, stderr: '' };
+    }
+    const [target, ...rest] = args;
+    if (rest.length) {
+      acl.set(target, `${WINDOWS_IDENTITY.name}:(F)`);
+      return { status: 0, stdout: `processed file: ${target}\r\n`, stderr: '' };
+    }
+    return { status: 0, stdout: `${target} ${acl.get(target) ?? 'BUILTIN\\Users:(I)(F)'}\r\n`, stderr: '' };
+  };
+}
+
 // Runs a CLI command on a descendant-producing ticket until the descendant exists, cancels the run,
 // and returns the parsed report after checking that the descendant died with its process group.
 async function cancelAndCollect(t, command, env, box, pidFile) {
@@ -78,7 +102,7 @@ function fixture(t) {
   };
 }
 
-test('success preserves stdin and scopes the process environment', async (t) => {
+test('success preserves stdin and scopes the process environment', POSIX_FIXTURE, async (t) => {
   const box = fixture(t);
   const ticket = 'Implement the ticket; $(no-shell) "quoted"\nsecond line — café';
   const result = await box.runWorker(ticket);
@@ -98,14 +122,14 @@ test('success preserves stdin and scopes the process environment', async (t) => 
   assert.ok(!JSON.stringify(worker.redact(result, 'test-secret')).includes('test-secret'));
 });
 
-test('write mode requires the explicit flag', async (t) => {
+test('write mode requires the explicit flag', POSIX_FIXTURE, async (t) => {
   const box = fixture(t);
   const result = await box.runWorker('ticket', true);
   assert.equal(result.sandbox, 'workspace-write');
   assert.ok(JSON.parse(result.result).argv.includes('workspace-write'));
 });
 
-test('no false success on a bad completion', async (t) => {
+test('no false success on a bad completion', POSIX_FIXTURE, async (t) => {
   const box = fixture(t);
   for (const mode of ['empty', 'incomplete', 'failed', 'nonzero', 'malformed']) {
     const result = await box.runWorker(mode);
@@ -114,7 +138,7 @@ test('no false success on a bad completion', async (t) => {
   }
 });
 
-test('timeout kills the worker process group', async (t) => {
+test('timeout kills the worker process group', POSIX_FIXTURE, async (t) => {
   const box = fixture(t);
   box.config.limits.timeout_seconds = 0.1;
   const result = await box.runWorker('sleep');
@@ -122,14 +146,14 @@ test('timeout kills the worker process group', async (t) => {
   assert.throws(() => process.kill(result.worker_pid, 0), { code: 'ESRCH' });
 });
 
-test('output limit stops the worker', async (t) => {
+test('output limit stops the worker', POSIX_FIXTURE, async (t) => {
   const box = fixture(t);
   box.config.limits.max_output_bytes = 1000;
   const result = await box.runWorker('output_limit');
   assert.equal(result.status, 'output_limit');
 });
 
-test('lock blocks a parallel worker and releases', async (t) => {
+test('lock blocks a parallel worker and releases', POSIX_FIXTURE, async (t) => {
   const box = fixture(t);
   const lock = await worker.workerLock();
   try {
@@ -140,6 +164,18 @@ test('lock blocks a parallel worker and releases', async (t) => {
   assert.equal((await box.runWorker()).status, 'completed');
 });
 
+test('the worker lock does not depend on a POSIX uid', async () => {
+  // Windows has no uid: private-files.js opens the lock with an ACL, stubbed here so the Windows
+  // branch can be exercised on any host.
+  const windows = { platform: 'win32', identity: WINDOWS_IDENTITY, exec: windowsCommands() };
+  const lock = await worker.workerLock(windows);
+  try {
+    await assert.rejects(() => worker.workerLock(windows), /Another DeepCodex worker/);
+  } finally {
+    lock.close();
+  }
+});
+
 test('project MCP servers are rejected before spawn', async (t) => {
   const box = fixture(t);
   fs.mkdirSync(path.join(box.dir, '.codex'));
@@ -147,7 +183,7 @@ test('project MCP servers are rejected before spawn', async (t) => {
   await assert.rejects(() => box.runWorker(), /Project MCP/);
 });
 
-test('Desktop discovery checks both app names and skips unusable binaries', (t) => {
+test('Desktop discovery checks both app names and skips unusable binaries', POSIX_FIXTURE, (t) => {
   const box = fixture(t);
   const apps = path.join(box.dir, 'Applications');
   const empty = path.join(box.dir, 'empty');
@@ -172,7 +208,40 @@ test('Desktop discovery checks both app names and skips unusable binaries', (t) 
   assert.equal(worker.resolveCodex({ ...env, PATH: box.dir }, options), box.binary);
 });
 
-test('incompatible PATH CLI reports an actionable error', (t) => {
+test('Windows discovery follows PATHEXT and skips the POSIX shim npm also writes', (t) => {
+  const box = fixture(t);
+  const bin = path.join(box.dir, 'npm-bin');
+  fs.mkdirSync(bin);
+  const posix = path.join(bin, 'codex');
+  const shim = path.join(bin, 'codex.cmd');
+  fs.writeFileSync(posix, '#!/bin/sh\n');
+  fs.chmodSync(posix, 0o700);
+  fs.writeFileSync(shim, '@echo off\r\n');
+  const env = { ...box.env, PATH: bin, PATHEXT: '.COM;.EXE;.BAT;.CMD' };
+  assert.equal(worker.resolveCodex(env, { platform: 'win32' }), shim);
+  const native = path.join(bin, 'codex.exe');
+  fs.writeFileSync(native, 'MZ');
+  assert.equal(worker.resolveCodex(env, { platform: 'win32' }), native,
+    'a real executable is preferred over the command shim');
+  assert.equal(worker.resolveCodex(env, { platform: 'linux' }), posix, 'POSIX resolution is unchanged');
+  assert.equal(worker.resolveCodex({ ...env, PATH: path.join(box.dir, 'empty') }, { platform: 'win32' }), undefined);
+});
+
+test('the worker environment keeps and spells the variables a Windows child needs', () => {
+  const env = worker.workerEnvironment({
+    pAtH: 'C:\\bin', pathext: '.EXE;.CMD', SYSTEMROOT: 'C:\\Windows', ComSpec: 'C:\\Windows\\system32\\cmd.exe',
+    windir: 'C:\\Windows', TEMP: 'C:\\Temp', UserProfile: 'C:\\Users\\dev', XDG_CONFIG_HOME: '/home/dev/.config',
+    LC_ALL: 'C.UTF-8', DEEPSEEK_API_KEY: 'test-secret', PARENT_SECRET: 'must-not-inherit',
+  });
+  assert.deepEqual(env, {
+    PATH: 'C:\\bin', PATHEXT: '.EXE;.CMD', SystemRoot: 'C:\\Windows',
+    ComSpec: 'C:\\Windows\\system32\\cmd.exe', windir: 'C:\\Windows', TEMP: 'C:\\Temp',
+    USERPROFILE: 'C:\\Users\\dev', XDG_CONFIG_HOME: '/home/dev/.config', LC_ALL: 'C.UTF-8',
+    DEEPSEEK_API_KEY: 'test-secret',
+  });
+});
+
+test('incompatible PATH CLI reports an actionable error', POSIX_FIXTURE, (t) => {
   const box = fixture(t);
   fs.writeFileSync(box.binary, '#!/bin/sh\necho incompatible\n');
   const report = worker.doctor(box.config, { ...box.env, PATH: box.dir });
@@ -180,7 +249,7 @@ test('incompatible PATH CLI reports an actionable error', (t) => {
   assert.match(report.errors[0], /incompatible.*--strict-config/);
 });
 
-test('doctor without an api key never runs inference', (t) => {
+test('doctor without an api key never runs inference', POSIX_FIXTURE, (t) => {
   const box = fixture(t);
   const env = { ...box.env, PATH: box.dir };
   delete env.DEEPSEEK_API_KEY;
@@ -267,7 +336,7 @@ test('credential quoting matches python shlex', (t) => {
   }
 });
 
-test('cli rejects a ticket that is not valid utf-8', (t) => {
+test('cli rejects a ticket that is not valid utf-8', POSIX_FIXTURE, (t) => {
   const box = fixture(t);
   const ticket = path.join(box.dir, 'ticket.bin');
   fs.writeFileSync(ticket, Buffer.from([0x66, 0x6f, 0x6f, 0xff, 0xfe, 0x0a]));
@@ -283,7 +352,7 @@ test('cli rejects a ticket that is not valid utf-8', (t) => {
   assert.ok(!result.stderr.includes('worker.started'), 'an undecodable ticket must not start a worker');
 });
 
-test('cli run loads the ticket file and redacts the key', (t) => {
+test('cli run loads the ticket file and redacts the key', POSIX_FIXTURE, (t) => {
   const box = fixture(t);
   const home = path.join(box.dir, 'home');
   fs.mkdirSync(path.join(home, '.config/deepcodex'), { recursive: true });
@@ -303,7 +372,7 @@ test('cli run loads the ticket file and redacts the key', (t) => {
   assert.ok(!result.stdout.includes('file-secret'));
 });
 
-test('temporary run artifacts are removed', async (t) => {
+test('temporary run artifacts are removed', POSIX_FIXTURE, async (t) => {
   const box = fixture(t);
   const result = await box.runWorker();
   const argv = JSON.parse(result.result).argv;
@@ -311,7 +380,7 @@ test('temporary run artifacts are removed', async (t) => {
   assert.equal(fs.existsSync(path.dirname(final)), false);
 });
 
-test('cancel returns json and terminates descendants', async (t) => {
+test('cancel returns json and terminates descendants', POSIX_FIXTURE, async (t) => {
   const box = fixture(t);
   const pidFile = path.join(box.dir, 'descendant.pid');
   const env = { ...process.env, PATH: `${box.dir}${path.delimiter}${process.env.PATH ?? ''}`, DEEPSEEK_API_KEY: 'test-secret' };
@@ -320,7 +389,7 @@ test('cancel returns json and terminates descendants', async (t) => {
 
 // The CLI imports main() instead of executing worker.js, so cancellation must not depend on the
 // entrypoint branch that registers the signal handlers.
-test('cancel works through the deepcodex cli, which imports main', async (t) => {
+test('cancel works through the deepcodex cli, which imports main', POSIX_FIXTURE, async (t) => {
   const box = fixture(t);
   const pidFile = path.join(box.dir, 'bin-descendant.pid');
   const env = { ...process.env, PATH: box.dir, HOME: box.dir, DEEPSEEK_API_KEY: 'test-secret' };

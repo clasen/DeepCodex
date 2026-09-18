@@ -69,7 +69,8 @@ test('private writes replace atomically with restricted permissions and reject s
   fs.writeFileSync(file, 'before', { mode: 0o644 });
   privateWrite(file, 'after');
   assert.equal(fs.readFileSync(file, 'utf8'), 'after');
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  if (process.platform === 'win32') return;
   const victim = path.join(dir, 'victim');
   fs.writeFileSync(victim, 'preserved');
   fs.symlinkSync(victim, file + '.tmp');

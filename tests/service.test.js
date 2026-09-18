@@ -13,7 +13,7 @@ const config = {
 test('systemd escapes executable paths and preserves environment values', () => {
   const state = { node: '/Node $dir/100%/node', runtime: '/a "quoted"/runtime', config };
   const unit = systemdUnit(state, { PATH: '/a/$path:100%' });
-  assert.match(unit, /ExecStart="\/Node \$\$dir\/100%%\/node"/);
+  assert.match(unit, /ExecStart=:"\/Node \$dir\/100%%\/node"/);
   assert.ok(unit.includes('WorkingDirectory="/a \\"quoted\\"/runtime"'));
   assert.ok(unit.includes('"PATH=/a/$path:100%%"'));
   assert.match(unit, /Restart=always\nRestartSec=10\nUMask=0077/);
@@ -51,25 +51,28 @@ test('Linux fails immediately when the user service manager is unavailable', t =
   assert.equal(calls.length, 1);
 });
 
-test('Windows registers a limited logon task using an encoded action and literal paths', () => {
+test('Windows registers a limited logon task that runs Node directly with literal paths', () => {
   const state = { node: 'C:\\Program Files\\node.exe', runtime: "C:\\Users\\O'Brien $x\\runtime", config };
   const env = { SystemRoot: 'C:\\Windows', PATH: 'C:\\some & dir' };
-  const script = windowsServiceScript('install', state, env);
+  const script = windowsServiceScript('install', state);
   assert.match(script, /-LogonType Interactive -RunLevel Limited/);
+  const taskIdentity = script.split('\n')[1];
+  assert.match(taskIdentity, /WindowsIdentity.*User.Value/);
+  for (const action of ['stop', 'remove']) {
+    assert.equal(windowsServiceScript(action, state).split('\n')[1], taskIdentity);
+  }
   assert.match(script, /New-ScheduledTaskTrigger -AtLogOn -User \$user/);
   assert.match(script, /ExecutionTimeLimit \(\[TimeSpan\]::Zero\)/);
   assert.ok(script.indexOf('Stop-ScheduledTask') < script.indexOf('Register-ScheduledTask'));
-  const encoded = script.match(/-EncodedCommand ([A-Za-z0-9+/=]+)/)[1];
-  const runner = Buffer.from(encoded, 'base64').toString('utf16le');
-  assert.ok(runner.includes("& 'C:\\Program Files\\node.exe' 'C:\\Users\\O''Brien $x\\runtime\\scripts\\desktop.js' serve"));
-  assert.ok(runner.includes("$env:PATH = 'C:\\some & dir'"));
-  assert.match(runner, /exit \$LASTEXITCODE/);
+  assert.ok(script.includes("New-ScheduledTaskAction -Execute 'C:\\Program Files\\node.exe'"));
+  assert.ok(script.includes(`-Argument '"C:\\Users\\O''Brien $x\\runtime\\scripts\\desktop.js" serve'`));
+  assert.doesNotMatch(script, /cmd.exe|& 'C:/);
   const calls = [];
   userService('install', state, env, { platform: 'win32', spawn: (command, args) => { calls.push([command, args]); return { status: 0 }; } });
   assert.equal(calls[0][0], 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
   assert.equal(Buffer.from(calls[0][1].at(-1), 'base64').toString('utf16le'), script);
-  assert.match(windowsServiceScript('remove', state, env), /Unregister-ScheduledTask/);
-  assert.doesNotMatch(windowsServiceScript('stop', state, env), /Unregister-ScheduledTask/);
+  assert.match(windowsServiceScript('remove', state), /Unregister-ScheduledTask/);
+  assert.doesNotMatch(windowsServiceScript('stop', state), /Unregister-ScheduledTask/);
 });
 
 test('Windows propagates service failures and requires SystemRoot', () => {

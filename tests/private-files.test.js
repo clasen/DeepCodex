@@ -7,6 +7,23 @@ import { currentWindowsIdentity, ensurePrivateDirectory, privateOpen, privateRea
 
 const SID = 'S-1-5-21-1111111111-2222222222-3333333333-1001';
 const ACCOUNT = 'DESKTOP-TEST\\tester';
+const POSIX = process.platform !== 'win32';
+const SKIP_POSIX = POSIX ? false : 'POSIX permission bits do not apply on this platform';
+
+function canSymlink() {
+  const probe = fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-symlink-probe-'));
+  try {
+    fs.symlinkSync(probe, path.join(probe, 'link'), 'dir');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probe, { recursive: true, force: true });
+  }
+}
+
+const SYMLINKS = canSymlink();
+const SKIP_SYMLINKS = SYMLINKS ? false : 'creating symlinks is not permitted on this host';
 
 function temporary(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-private-files-'));
@@ -14,9 +31,9 @@ function temporary(t) {
   return root;
 }
 
-// Simulates whoami and icacls so the Windows branch runs on any host. A path
-// that was granted an inheritable ACL passes it on to its children, like Windows
-// does, and anything else inherits the permissive profile ACL.
+// Simulates whoami and icacls so the Windows branch runs on any host. A path that
+// was granted an inheritable ACL passes it on to its children, like Windows does,
+// and anything else inherits the permissive profile ACL.
 function windowsHarness({ identityStatus = 0, applyStatus = 0, foreign = new Map() } = {}) {
   const acl = new Map();
   const calls = [];
@@ -32,7 +49,8 @@ function windowsHarness({ identityStatus = 0, applyStatus = 0, foreign = new Map
       if (rest.length) {
         if (applyStatus !== 0) return { status: applyStatus, stdout: '', stderr: 'Access is denied.' };
         const grant = rest.at(-1);
-        acl.set(target, [`${ACCOUNT}:${grant.slice(grant.indexOf(':') + 1)}`]);
+        const granted = grant.slice(grant.indexOf(':') + 1).replace(/([A-Z]+)$/, '($1)');
+        acl.set(target, [`${ACCOUNT}:${granted}`]);
         return { status: 0, stdout: `processed file: ${target}\r\n`, stderr: '' };
       }
       const inherited = acl.get(target) ?? (acl.get(path.dirname(target))?.some(entry => entry.includes('(OI)'))
@@ -47,7 +65,13 @@ function windowsHarness({ identityStatus = 0, applyStatus = 0, foreign = new Map
   return { exec, calls, acl };
 }
 
-test('POSIX private directories are created owner-only and reject symlinks', t => {
+// The Windows branch is mocked, the POSIX branch is the native platform: the same
+// assertions cover both without depending on the host that runs the suite.
+function branchOptions() {
+  return POSIX ? {} : { platform: 'win32', exec: windowsHarness().exec };
+}
+
+test('private directories are created owner-only', { skip: SKIP_POSIX }, t => {
   const root = temporary(t);
   const directory = path.join(root, 'nested/private');
   ensurePrivateDirectory(directory);
@@ -55,12 +79,25 @@ test('POSIX private directories are created owner-only and reject symlinks', t =
   fs.chmodSync(directory, 0o755);
   ensurePrivateDirectory(directory);
   assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
-  const link = path.join(root, 'link');
-  fs.symlinkSync(directory, link);
-  assert.throws(() => ensurePrivateDirectory(link), /symlink/);
 });
 
-test('POSIX private writes replace atomically with 0600 and reject symlinks', t => {
+test('symlinked paths are rejected instead of being followed', { skip: SKIP_SYMLINKS }, t => {
+  const root = temporary(t);
+  const options = branchOptions();
+  const directory = path.join(root, 'private');
+  ensurePrivateDirectory(directory, options);
+  const link = path.join(root, 'linked');
+  fs.symlinkSync(directory, link, 'dir');
+  assert.throws(() => ensurePrivateDirectory(link, options), /symlink/);
+  const victim = path.join(root, 'victim');
+  fs.writeFileSync(victim, 'preserved');
+  const fileLink = path.join(root, 'linked.env');
+  fs.symlinkSync(victim, fileLink, 'file');
+  assert.throws(() => privateRead(fileLink, options));
+  assert.equal(fs.readFileSync(victim, 'utf8'), 'preserved');
+});
+
+test('private writes replace atomically with owner-only permissions', { skip: SKIP_POSIX }, t => {
   const root = temporary(t);
   const file = path.join(root, 'state.json');
   fs.writeFileSync(file, 'before', { mode: 0o644 });
@@ -68,26 +105,20 @@ test('POSIX private writes replace atomically with 0600 and reject symlinks', t 
   assert.equal(fs.readFileSync(file, 'utf8'), 'after');
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.deepEqual(fs.readdirSync(root), ['state.json']);
-  const victim = path.join(root, 'victim');
-  fs.writeFileSync(victim, 'preserved');
-  fs.symlinkSync(victim, `${file}.tmp`);
-  assert.throws(() => privateWrite(file, 'leaked'));
-  assert.equal(fs.readFileSync(victim, 'utf8'), 'preserved');
-  assert.equal(fs.readFileSync(file, 'utf8'), 'after');
 });
 
-test('POSIX private writes can refuse to reuse an existing temporary file', t => {
+test('private writes never reuse or truncate an existing temporary file', t => {
   const root = temporary(t);
   const file = path.join(root, 'state.json');
   fs.writeFileSync(file, 'before');
   const scratch = path.join(root, 'state.json.exclusive');
   fs.writeFileSync(scratch, 'stale');
-  assert.throws(() => privateWrite(file, 'after', { temporary: scratch, exclusive: true }), error => error.code === 'EEXIST');
+  assert.throws(() => privateWrite(file, 'after', { temporary: scratch }), error => error.code === 'EEXIST');
   assert.equal(fs.readFileSync(file, 'utf8'), 'before');
   assert.equal(fs.readFileSync(scratch, 'utf8'), 'stale');
 });
 
-test('POSIX private reads stay owner-only and refuse symlinks and directories', t => {
+test('private reads stay owner-only and refuse directories', { skip: SKIP_POSIX }, t => {
   const root = temporary(t);
   assert.equal(privateRead(path.join(root, 'missing.env')), null);
   const file = path.join(root, '.env');
@@ -95,12 +126,6 @@ test('POSIX private reads stay owner-only and refuse symlinks and directories', 
   fs.chmodSync(file, 0o644);
   assert.equal(privateRead(file), 'fixture-value');
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-  const victim = path.join(root, 'victim');
-  fs.writeFileSync(victim, 'preserved', { mode: 0o600 });
-  const link = path.join(root, 'linked.env');
-  fs.symlinkSync(victim, link);
-  assert.throws(() => privateRead(link));
-  assert.equal(fs.readFileSync(victim, 'utf8'), 'preserved');
   assert.throws(() => privateRead(root), /regular file/);
   const fd = privateOpen(file);
   try {
@@ -127,11 +152,6 @@ test('Windows private directories are restricted to the current SID and verified
     ['icacls', directory, '/inheritance:r', '/grant:r', `*${SID}:(OI)(CI)F`],
     ['icacls', directory],
   ]);
-  const link = path.join(root, 'linked');
-  fs.symlinkSync(directory, link);
-  const untouched = windowsHarness();
-  assert.throws(() => ensurePrivateDirectory(link, { platform: 'win32', exec: untouched.exec }), /symlink/);
-  assert.deepEqual(untouched.calls, []);
 });
 
 test('Windows private writes grant only the current SID without POSIX calls', t => {
@@ -181,17 +201,19 @@ test('Windows helpers fail closed when owner-only access cannot be proven', t =>
   assert.equal(fs.existsSync(`${file}.tmp`), false);
 });
 
-test('Windows private reads return null for missing files and refuse reparse points', t => {
+test('Windows private reads return null for missing files and refuse directories', t => {
   const root = temporary(t);
   const harness = windowsHarness();
   assert.equal(privateRead(path.join(root, 'missing.env'), { platform: 'win32', exec: harness.exec }), null);
   assert.deepEqual(harness.calls, []);
-  const victim = path.join(root, 'victim');
-  fs.writeFileSync(victim, 'preserved');
-  const link = path.join(root, 'linked.env');
-  fs.symlinkSync(victim, link);
-  assert.throws(() => privateRead(link, { platform: 'win32', exec: harness.exec }), /symlink/);
-  assert.equal(fs.readFileSync(victim, 'utf8'), 'preserved');
-  assert.deepEqual(harness.calls, []);
   assert.throws(() => privateRead(root, { platform: 'win32', exec: harness.exec }), /regular file/);
+});
+
+test('failed replacement removes the private temporary file', t => {
+  const root = temporary(t);
+  const destination = path.join(root, 'existing-directory');
+  fs.mkdirSync(destination);
+  assert.throws(() => privateWrite(destination, 'fixture-value'));
+  assert.equal(fs.existsSync(destination + '.tmp'), false);
+  assert.ok(fs.statSync(destination).isDirectory());
 });

@@ -2,12 +2,12 @@
 //
 // POSIX keeps mode 0700/0600, the current uid and O_NOFOLLOW. Windows mode bits
 // and getuid() do not restrict other users, so the same guarantee is implemented
-// there with an explicit ACL for the current user SID: inherited entries are
-// removed, only that SID keeps access, and the resulting ACL is read back and
-// verified. Every Windows step fails closed: when the identity, icacls or the
-// verification cannot prove owner-only access, the call throws before content is
-// written. Symlinks and other reparse points are refused before and after
-// opening, so a private path is never redirected somewhere else.
+// there with an ACL for the current user SID: inherited entries are removed, only
+// that SID keeps access, and the ACL is read back and verified. The Windows steps
+// fail closed: when the identity, icacls or the verification cannot prove
+// owner-only access, the call throws before content is written.
+//
+// options is the test seam: platform, exec and identity can be injected.
 
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -61,8 +61,8 @@ function csvFields(line) {
   return fields.map(field => field.trim());
 }
 
-// whoami reads its output in the active console code page, so CSV parsing keeps
-// working when account or machine names are not ASCII.
+// whoami writes CSV in the active console code page, so the fields are parsed by
+// hand instead of by splitting on commas.
 export function currentWindowsIdentity(options = {}) {
   const exec = commandOf(options);
   const result = exec('whoami', ['/user', '/fo', 'csv', '/nh']);
@@ -79,15 +79,25 @@ function identityOf(options) {
   return options.identity ?? currentWindowsIdentity(options);
 }
 
-function aclEntries(output) {
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// icacls echoes the target path in front of the first access entry, so that path
+// is dropped before the trustee is read. A path printed in another form fails
+// verification instead of being mistaken for an allowed principal.
+function aclEntries(output, target) {
+  const prefix = escapeRegExp(String(target).replaceAll('\\', '/')).replaceAll('/', '[\\\\/]');
+  const printed = new RegExp(`^${prefix}[\\\\/]?\\s+`);
   return String(output ?? '')
     .split(/\r?\n/)
     .map(line => line.trim())
     .flatMap(line => {
-      // icacls lists <trustee>:(I)(OI)(CI)(F) and also accepts the unparenthesized
-      // simple right in a grant, so both forms have to parse here.
-      const match = /^(.*?):\s*((?:(?:\([^)]*\))+[A-Z]*))$/.exec(line);
-      return match ? [{ trustee: match[1].trim(), flags: match[2] }] : [];
+      const match = printed.exec(line);
+      const entry = match ? line.slice(match[0].length) : line;
+      // icacls lists (I)(OI)(CI)(F) and also accepts the plain right in a grant.
+      const parsed = /^(.*?):\s*((?:(?:\([^)]*\))+[A-Z]*))$/.exec(entry);
+      return parsed ? [{ trustee: parsed[1].trim(), flags: parsed[2] }] : [];
     });
 }
 
@@ -96,9 +106,6 @@ function sameIdentity(trustee, identity) {
   return value === identity.sid.toLowerCase() || value === identity.name.toLowerCase();
 }
 
-// icacls replaces the inherited entries with a single grant for the current SID
-// and the ACL is then read back: anything still reachable by another principal
-// aborts the operation instead of leaving a readable secret behind.
 function restrictWindows(target, kind, identity, options) {
   const exec = commandOf(options);
   const grant = kind === 'directory' ? `*${identity.sid}:(OI)(CI)F` : `*${identity.sid}:F`;
@@ -106,11 +113,14 @@ function restrictWindows(target, kind, identity, options) {
   if (applied.error || applied.status !== 0) commandFailure('icacls', applied);
   const listed = exec('icacls', [target]);
   if (listed.error || listed.status !== 0) commandFailure('icacls', listed);
-  const entries = aclEntries(listed.stdout);
+  const entries = aclEntries(listed.stdout, target);
   if (!entries.length) throw new Error(`Cannot verify owner-only permissions for ${target}: no access entries reported.`);
   const foreign = entries.filter(entry => !sameIdentity(entry.trustee, identity));
   if (foreign.length) {
     throw new Error(`Cannot verify owner-only permissions for ${target}: access remains for ${foreign.map(entry => entry.trustee).join(', ')}.`);
+  }
+  if (!entries.some(entry => entry.flags.includes('F'))) {
+    throw new Error(`Cannot verify owner-only permissions for ${target}: full access for the current user is missing.`);
   }
   return entries;
 }
@@ -129,9 +139,9 @@ export function ensurePrivateDirectory(directory, options = {}) {
   return directory;
 }
 
-// Windows has no O_NOFOLLOW, so the path is inspected before the open and the
-// handle is compared with that inspection afterwards. A reparse point, or a file
-// swapped in between the two steps, fails the open.
+// Windows has no O_NOFOLLOW: the path is inspected before the open and the handle
+// is compared with that inspection afterwards, so a path swapped in between the
+// two steps fails the open.
 export function privateOpen(filename, options = {}) {
   const platform = platformOf(options);
   const flags = options.flags ?? fs.constants.O_RDONLY;
@@ -188,23 +198,19 @@ export function privateRead(filename, options = {}) {
   }
 }
 
-// Atomic private write: the temporary file is created owner-only, receives the
-// content and replaces the target with a rename. options.temporary keeps the
-// caller's own temporary name and options.exclusive refuses to truncate a file
-// that is already there.
+// Atomic: the temporary file is written owner-only and replaces the target with a
+// rename. It is always created exclusively, so an existing file is never
+// truncated before its permissions could be checked.
 export function privateWrite(filename, content, options = {}) {
   const temporary = options.temporary ?? `${filename}.tmp`;
-  const exclusive = options.exclusive === true;
-  const create = exclusive ? fs.constants.O_CREAT | fs.constants.O_EXCL : fs.constants.O_CREAT | fs.constants.O_TRUNC;
-  const fd = privateOpen(temporary, { ...options, flags: create | fs.constants.O_WRONLY, mode: 0o600 });
+  const flags = fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY;
+  const fd = privateOpen(temporary, { ...options, flags, mode: 0o600 });
   try {
-    fs.writeFileSync(fd, content);
-  } catch (error) {
-    fs.closeSync(fd);
+    try { fs.writeFileSync(fd, content); }
+    finally { fs.closeSync(fd); }
+    fs.renameSync(temporary, filename);
+    return filename;
+  } finally {
     fs.rmSync(temporary, { force: true });
-    throw error;
   }
-  fs.closeSync(fd);
-  fs.renameSync(temporary, filename);
-  return filename;
 }

@@ -10,6 +10,9 @@ import { ROOT, loadConfig, workerEnvironment, loadCredentials, doctor } from './
 import { parseToml } from './toml.js';
 import { startPilot } from './pilot-router.js';
 import { userService } from './service.js';
+import { ensurePrivateDirectory, privateWrite } from './private-files.js';
+import { spawnPlan } from './platform.js';
+export { privateWrite } from './private-files.js';
 
 const STATE = path.join(os.homedir(), '.config/deepcodex/desktop');
 const LSREGISTER = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
@@ -44,16 +47,6 @@ function updateAgentInstructions(configPath, options) {
   const before = fs.existsSync(filename) ? fs.readFileSync(filename, 'utf8') : '';
   const updated = mergeAgentInstructions(before, options);
   if (updated !== before) privateWrite(filename, updated);
-}
-
-export function privateWrite(filename, content) {
-  const temporary = filename + '.tmp';
-  const fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW, 0o600);
-  try {
-    fs.fchmodSync(fd, 0o600);
-    fs.writeFileSync(fd, content);
-  } finally { fs.closeSync(fd); }
-  fs.renameSync(temporary, filename);
 }
 
 export function mergeConfig(text, sections) {
@@ -147,8 +140,13 @@ function createServiceApp(runtime, label) {
   return executable;
 }
 
+function runCodex(binary, args, env) {
+  const plan = spawnPlan(binary, args, { env });
+  return spawnSync(plan.file, plan.args, { env, encoding: 'utf8', ...plan.options });
+}
+
 export function installPlugin(root, codex, env) {
-  const home = env.HOME || os.homedir();
+  const home = process.platform === 'win32' ? env.USERPROFILE || os.homedir() : env.HOME || os.homedir();
   const marketplacePath = path.join(home, '.agents/plugins/marketplace.json');
   const marketplace = fs.existsSync(marketplacePath) ? readJson(marketplacePath) : {
     name: 'personal', interface: { displayName: 'Personal' }, plugins: [],
@@ -172,7 +170,7 @@ export function installPlugin(root, codex, env) {
   fs.mkdirSync(path.dirname(marketplacePath), { recursive: true });
   privateWrite(marketplacePath, JSON.stringify(marketplace, null, 2) + '\n');
   const run = (command, selector) => {
-    const result = spawnSync(codex, ['plugin', command, selector, '--json'], { env, encoding: 'utf8' });
+    const result = runCodex(codex, ['plugin', command, selector, '--json'], env);
     if (result.error || result.status !== 0) throw new Error(`Cannot ${command} Codex plugin ${selector}; rerun deepcodex install after checking Codex plugin support`);
     return JSON.parse(result.stdout);
   };
@@ -197,7 +195,7 @@ export async function install() {
   loadCredentials(env, original);
   const diagnosis = doctor(original, env);
   if (diagnosis.status !== 'ready') throw new Error(`DeepCodex prerequisites are not ready: ${diagnosis.errors.join(' ')}`);
-  const pluginSupport = spawnSync(diagnosis.codex, ['plugin', 'add', '--help'], { env, encoding: 'utf8' });
+  const pluginSupport = runCodex(diagnosis.codex, ['plugin', 'add', '--help'], env);
   if (pluginSupport.error || pluginSupport.status !== 0) throw new Error('Codex CLI must support plugin add; update Codex Desktop before installing DeepCodex');
   const configPath = path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'config.toml');
   const before = fs.readFileSync(configPath, 'utf8');
@@ -206,8 +204,7 @@ export async function install() {
   const parsed = parseToml(before);
   if (!['openai', 'deepcodex'].includes(parsed.model_provider ?? 'openai')) throw new Error('An unrelated custom provider is active; refusing to replace it');
   if (parsed.openai_base_url || parsed.chatgpt_base_url) throw new Error('An existing endpoint override needs an explicit integration plan');
-  fs.mkdirSync(STATE, { recursive: true, mode: 0o700 });
-  fs.chmodSync(STATE, 0o700);
+  ensurePrivateDirectory(STATE);
   const runtime = path.join(os.homedir(), '.local/share/deepcodex/runtime');
   copyRuntime(ROOT, runtime);
   const executable = process.platform === 'darwin' ? createServiceApp(runtime, config.service_label) : null;
@@ -215,7 +212,7 @@ export async function install() {
   if (parsed.model_catalog_json && path.resolve(expandHome(parsed.model_catalog_json)) !== path.join(STATE, 'models.json')) {
     catalog = readJson(expandHome(parsed.model_catalog_json));
   } else {
-    const result = spawnSync(diagnosis.codex, ['debug', 'models', '--bundled'], { encoding: 'utf8' });
+    const result = runCodex(diagnosis.codex, ['debug', 'models', '--bundled'], env);
     if (result.error || result.status !== 0) throw new Error('Cannot read the bundled Codex model catalog');
     catalog = JSON.parse(result.stdout);
   }

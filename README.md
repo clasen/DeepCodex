@@ -32,17 +32,25 @@ on the delegated work and the coordinator's usage. See
 
 ## Requirements
 
-- macOS. The installer and the LaunchAgent service are macOS-only.
+- macOS, Linux with a running systemd user session, or Windows with PowerShell
+  and Task Scheduler. Install as the user who runs Codex. WSL uses the Linux
+  service and requires systemd enabled.
 - Node.js >= 22.15. The worker uses `node:sqlite`, `fetch` and
   `import.meta.resolve`.
 - A compatible Codex CLI, either on `PATH` or bundled with Codex Desktop.
-  When no CLI is on `PATH`, DeepCodex checks `Codex.app` and `ChatGPT.app`
+  On macOS, when no CLI is on `PATH`, DeepCodex checks `Codex.app` and `ChatGPT.app`
   under `~/Applications` and `/Applications`, in that order. No separate CLI
-  installation is needed when Desktop includes a compatible binary.
+  installation is needed on macOS when Desktop includes a compatible binary.
+  On Windows and Linux, install a compatible Codex CLI on `PATH`. Standard npm
+  Node wrappers on Windows run directly through Node, preserving literal arguments.
+  Custom `.cmd`/`.bat` wrappers cannot accept `%` in paths or arguments; use the
+  npm installation or a native `codex.exe` in that case.
   `codex exec` must support `--ignore-user-config`, `--ephemeral`, `--json`
   and `--strict-config`; `deepcodex doctor` verifies this before activation.
   A CLI on `PATH` takes priority, even if it is incompatible.
 - A DeepSeek API key.
+
+The default router port is `4207`; only one router can use it on a machine.
 
 ## Install globally
 
@@ -57,6 +65,8 @@ deepcodex install
 
 The global installation adds `deepcodex` to npm's global bin directory, which
 must be on your `PATH`. Run it from any directory; no checkout path is needed.
+The same commands work in a POSIX shell, PowerShell or Command Prompt. In paths
+below, `~` means your home directory (`%USERPROFILE%` on Windows).
 
 To install the local checkout globally before publication, run these commands
 from the repository, then use the same `deepcodex` commands above:
@@ -70,8 +80,8 @@ npm install --global .
 
 `configure` asks for the DeepSeek API key with hidden input on the terminal and
 stores it in `~/.config/deepcodex/.env`. It creates the directory with mode
-`0700` and the file with mode `0600`, and it writes the key as plaintext in that
-file rather than in the macOS keychain.
+`0700` and the file with mode `0600` on macOS/Linux. On Windows it uses an
+owner-only ACL. The key is stored as plaintext in that file.
 
 The command does not accept a key argument or piped input, keeping the key out
 of shell history and process arguments. Press Ctrl-C to cancel without changing
@@ -101,8 +111,10 @@ result confirms local prerequisites, not provider authentication or account cred
   dependency) to `~/.local/share/deepcodex/runtime`;
 - writes private state, the model catalog and receipts to
   `~/.config/deepcodex/desktop`;
-- installs and starts the `com.deepcodex.router` LaunchAgent, bound only to
-  `127.0.0.1:4207`;
+- installs and starts `com.deepcodex.router`, bound only to `127.0.0.1:4207`: a
+  LaunchAgent on macOS, a systemd user service on Linux, or a scheduled task on
+  Windows. The service starts with the user session; Windows requires that user
+  to be logged in;
 - updates `~/.codex/config.toml` with the local provider, the subagent defaults
   and the generated model catalog, keeping a pre-install backup at
   `~/.config/deepcodex/desktop/config.before.toml`;
@@ -134,7 +146,7 @@ has not changed. Other personal marketplace entries are preserved.
 | --- | --- |
 | `deepcodex configure` | Prompt for the DeepSeek API key and write `~/.config/deepcodex/.env`. |
 | `deepcodex doctor` | Check Codex CLI compatibility and credential presence without inference. |
-| `deepcodex install` | Install the router runtime, LaunchAgent, Codex settings and current DeepCodex plugin. |
+| `deepcodex install` | Install the router runtime, user service, Codex settings and current DeepCodex plugin. |
 | `deepcodex uninstall` | Stop and remove the router, restoring the saved Codex configuration. Credentials are preserved. Refuses if config changed since installation. Restart Codex afterward; remove the npm package separately with `npm uninstall -g deepcodex`. |
 | `deepcodex status` | Query the installed router health endpoint without inference. |
 | `deepcodex run --cwd PATH --task-file PATH [--write]` | Run one bounded isolated worker ticket against DeepSeek. Read-only unless `--write` is given. |
@@ -142,14 +154,16 @@ has not changed. Other personal marketplace entries are preserved.
 | `deepcodex --version`, `deepcodex --help` | Print the package version or the command list. |
 
 `run` executes a single ticket and consumes DeepSeek API usage. It takes an
-exclusive per-user lock, so only one worker runs at a time.
+exclusive per-user lock, so only one worker runs at a time. On Windows, cancellation
+uses `taskkill /T`; descendants left behind after the Codex parent has already
+exited cannot be reliably terminated.
 
 ## How it works
 
 ### Request routing
 
 Codex talks to the router on loopback. The router authenticates each request
-with a capability token generated at install time and stored with mode `0600`,
+with a capability token generated at install time and stored with owner-only access,
 then routes by model:
 
 - requests for the child model (`deepseek-flash`) go to the DeepSeek Responses
@@ -194,15 +208,17 @@ The default suite is offline: it uses fixtures and spends no provider usage. The
 Codex transport test is skipped unless `DEEPCODEX_TEST_CODEX` points at a real
 `codex` binary; when it is set, that test launches the real CLI against a local
 fixture server. Treat it as an optional, deliberate opt-in rather than part of a
-routine run.
+routine run. Windows command definitions and ACL handling have mocked tests; the
+`.cmd` argument round trip runs only on Windows. Integration fixtures that require
+POSIX shell scripts and process groups are skipped on Windows.
 
 ## Security notes
 
 - The router listens only on `127.0.0.1` and rejects requests without the
   generated capability token.
-- Credentials live in `~/.config/deepcodex/.env` (`0700` directory, `0600`
-  file), outside the repository.
-- Receipts and router state live in the private `0700` directory
+- Credentials live in `~/.config/deepcodex/.env`, outside the repository, with
+  owner-only access (`0700` directory and `0600` file on macOS/Linux; ACLs on Windows).
+- Receipts and router state live in the private directory
   `~/.config/deepcodex/desktop`.
 - Subagents inherit Codex permissions. A ticket's allowed files are instructions
   to the worker, not a filesystem sandbox.

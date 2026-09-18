@@ -36,13 +36,14 @@ worker cannot read secrets accessible to the same user.
 ## Local integration
 
 Resolve plugin paths relative to this installed skill (the root is two levels
-above). The source launcher is `scripts/desktop.js`; the installed LaunchAgent
+above). The source launcher is `scripts/desktop.js`; the installed user service
 runs the stable copy under `~/.local/share/deepcodex/runtime`. Operational policy
 is in `config/desktop.json`, shared transport defaults in `config/pilot.json`,
 and the DeepSeek model and credential path in `config/worker.json`.
 
 Run `node <plugin>/scripts/desktop.js status` to check the local service without
-inference. The service is `com.deepcodex.router`, bound only to loopback. Private
+inference. The service is `com.deepcodex.router`, bound only to loopback: LaunchAgent on
+macOS, systemd user service on Linux, and a scheduled logon task on Windows. Private
 state and bounded metadata receipts live in `~/.config/deepcodex/desktop`.
 Receipts contain routing and tool names, not prompts, tool arguments or tokens.
 Do not print `state.json`, provider headers, credential files or full user config.

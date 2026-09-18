@@ -7,14 +7,14 @@ const help = `Usage: deepcodex <command>
 
 Commands:
   configure  Save the DeepSeek key using a hidden terminal prompt
-  install  Activate the local macOS router and install the Codex plugin
+  install  Activate the local router and install the Codex plugin
   uninstall  Remove the local router and restore Codex settings
   status   Check the installed router without inference
   doctor   Check worker prerequisites without inference
   run      Run an isolated worker ticket (consumes DeepSeek usage)
   pilot    Test native delegation (consumes Codex and DeepSeek usage)
 
-Requires macOS, Node.js >=22.15 and a compatible Codex CLI (PATH or Desktop bundle).
+Requires Node.js >=22.15 and a compatible Codex CLI (PATH or Desktop bundle).
 Run deepcodex configure to save the DeepSeek key in ~/.config/deepcodex/.env.
 Run deepcodex install after installing this npm package to activate the router
 and install or update the DeepCodex plugin, including its icon and skill.
