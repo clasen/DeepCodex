@@ -70,9 +70,9 @@ const RUNNER = [
 const WORKER_STUB = (root, codex, { failKill = false } = {}) => [
   `export const ROOT = ${JSON.stringify(root)};`,
   'export function loadConfig() {',
-  "  return { codex: { model: 'deepseek-flash', model_provider: 'opencodex-deepseek', model_reasoning_effort: 'high',",
+  "  return { codex: { model: 'deepseek-flash', model_provider: 'deepcodex-deepseek', model_reasoning_effort: 'high',",
   '      features: { multi_agent: false, plugins: false },',
-  "      model_providers: { 'opencodex-deepseek': { base_url: 'https://api.deepseek.com', env_key: 'DEEPSEEK_API_KEY' } } },",
+  "      model_providers: { 'deepcodex-deepseek': { base_url: 'https://api.deepseek.com', env_key: 'DEEPSEEK_API_KEY' } } },",
   "    model_metadata: { display_name: 'DeepSeek Flash (DeepCodex)' } };",
   '}',
   'export function workerEnvironment(source) { return { ...source }; }',
@@ -99,7 +99,7 @@ function child(overrides = {}) {
 
 // Isolated ROOT with a stubbed worker.js, a fake Codex and a fake router; no real CLI and no inference.
 function harness(t, { mode = 'complete', auth = true, vanish = false, failKill = false } = {}) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'opencodex-pilot-run-')));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-pilot-run-')));
   const box = {
     root,
     codexHome: path.join(root, 'codex-home'),

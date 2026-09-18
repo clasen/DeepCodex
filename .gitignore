@@ -4,4 +4,5 @@ __pycache__/
 .env
 .env.*
 node_modules/
+.pnpm-store/
 *.tgz

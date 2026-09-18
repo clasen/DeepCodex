@@ -7,10 +7,10 @@ import { once } from 'node:events';
 import test from 'node:test';
 import { loadConfig, runWorker, workerEnvironment } from '../scripts/worker.js';
 
-test('real Codex reads a file through a local provider fixture', { skip: !process.env.OPENCODEX_TEST_CODEX }, async t => {
-  const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'opencodex-transport-')));
+test('real Codex reads a file through a local provider fixture', { skip: !process.env.DEEPCODEX_TEST_CODEX }, async t => {
+  const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-transport-')));
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
-  const nonce = 'opencodex-transport-fixture';
+  const nonce = 'deepcodex-transport-fixture';
   fs.writeFileSync(path.join(cwd, 'nonce.txt'), nonce);
   const requests = [];
   const server = http.createServer(async (request, response) => {
@@ -37,13 +37,13 @@ test('real Codex reads a file through a local provider fixture', { skip: !proces
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   t.after(() => new Promise(resolve => server.close(resolve)));
-  console.log(JSON.stringify({ fixture_server_pid: process.pid, cwd, port: server.address().port, owner: 'OpenCodex transport test' }));
+  console.log(JSON.stringify({ fixture_server_pid: process.pid, cwd, port: server.address().port, owner: 'DeepCodex transport test' }));
   const config = loadConfig();
-  config.codex.model_providers['opencodex-deepseek'].base_url = `http://127.0.0.1:${server.address().port}`;
+  config.codex.model_providers['deepcodex-deepseek'].base_url = `http://127.0.0.1:${server.address().port}`;
   config.codex.features.enable_request_compression = false;
   config.limits.timeout_seconds = 30;
   const env = workerEnvironment({ ...process.env, DEEPSEEK_API_KEY: 'local-test-key' });
-  const result = await runWorker(process.env.OPENCODEX_TEST_CODEX, config, cwd,
+  const result = await runWorker(process.env.DEEPCODEX_TEST_CODEX, config, cwd,
     'Read nonce.txt with the shell tool and report completion.', false, env);
   assert.equal(result.status, 'completed', JSON.stringify(result));
   assert.equal(result.result.trim(), 'fixture completed');

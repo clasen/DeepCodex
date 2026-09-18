@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 const CLI = fileURLToPath(new URL('../bin/deepcodex.js', import.meta.url));
 
 function fixture(t) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'opencodex-cli-')));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-cli-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (const dir of ['bin', 'scripts', 'work dir', 'empty-path']) fs.mkdirSync(path.join(root, dir));
   fs.copyFileSync(CLI, path.join(root, 'bin/deepcodex.js'));

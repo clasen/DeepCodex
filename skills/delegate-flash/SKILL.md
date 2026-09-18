@@ -37,17 +37,17 @@ worker cannot read secrets accessible to the same user.
 
 Resolve plugin paths relative to this installed skill (the root is two levels
 above). The source launcher is `scripts/desktop.js`; the installed LaunchAgent
-runs the stable copy under `~/.local/share/opencodex/runtime`. Operational policy
+runs the stable copy under `~/.local/share/deepcodex/runtime`. Operational policy
 is in `config/desktop.json`, shared transport defaults in `config/pilot.json`,
 and the DeepSeek model and credential path in `config/worker.json`.
 
 Run `node <plugin>/scripts/desktop.js status` to check the local service without
 inference. The service is `com.deepcodex.router`, bound only to loopback. Private
-state and bounded metadata receipts live in `~/.config/opencodex/desktop`.
+state and bounded metadata receipts live in `~/.config/deepcodex/desktop`.
 Receipts contain routing and tool names, not prompts, tool arguments or tokens.
 Do not print `state.json`, provider headers, credential files or full user config.
 
-DeepSeek credentials stay in `~/.config/opencodex/.env` outside the plugin and
+DeepSeek credentials stay in `~/.config/deepcodex/.env` outside the plugin and
 are read by the service. Never ask for a key in chat or package `.env` files.
 The router forwards native Codex authentication only to OpenAI and the DeepSeek
 key only to DeepSeek. Native encrypted task handoffs use an additional OpenAI

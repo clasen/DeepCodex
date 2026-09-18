@@ -135,7 +135,7 @@ export async function startPilot(config, deepseekKey, capability) {
       }
     });
     try {
-      const supplied = Buffer.from(request.headers['x-opencodex-pilot'] || '');
+      const supplied = Buffer.from(request.headers['x-deepcodex-pilot'] || '');
       const expected = Buffer.from(capability);
       if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
         response.writeHead(403).end(); return;

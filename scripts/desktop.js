@@ -10,7 +10,7 @@ import { ROOT, loadConfig, workerEnvironment, loadCredentials, doctor } from './
 import { parseToml } from './toml.js';
 import { startPilot } from './pilot-router.js';
 
-const STATE = path.join(os.homedir(), '.config/opencodex/desktop');
+const STATE = path.join(os.homedir(), '.config/deepcodex/desktop');
 const LSREGISTER = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
 const readJson = filename => JSON.parse(fs.readFileSync(filename, 'utf8'));
 const expandHome = filename => filename.startsWith('~/') ? path.join(os.homedir(), filename.slice(2)) : filename;
@@ -176,22 +176,12 @@ export function installPlugin(root, codex, env) {
     return JSON.parse(result.stdout);
   };
   const selector = `${manifest.name}@${marketplace.name}`;
-  const result = run('add', selector);
-  const configPath = path.join(env.CODEX_HOME || path.join(home, '.codex'), 'config.toml');
-  const config = parseToml(fs.readFileSync(configPath, 'utf8'));
-  const legacySelector = `opencodex@${marketplace.name}`;
-  if (Object.hasOwn(config.plugins || {}, legacySelector)) run('remove', legacySelector);
-  const legacy = marketplace.plugins.find(plugin => plugin.name === 'opencodex' && plugin.source?.source === 'local');
-  if (legacy) {
-    marketplace.plugins = marketplace.plugins.filter(plugin => plugin !== legacy);
-    privateWrite(marketplacePath, JSON.stringify(marketplace, null, 2) + '\n');
-  }
-  return result;
+  return run('add', selector);
 }
 
 export async function health(state) {
   const response = await fetch(`http://127.0.0.1:${state.config.port}/health`, {
-    headers: { 'x-opencodex-pilot': state.capability },
+    headers: { 'x-deepcodex-pilot': state.capability },
     signal: AbortSignal.timeout(state.config.startup_timeout_seconds * 1000),
   });
   if (!response.ok) throw new Error(`Router health HTTP ${response.status}`);
@@ -213,11 +203,11 @@ export async function install() {
   const instructionsPath = path.join(path.dirname(configPath), 'AGENTS.md');
   mergeAgentInstructions(fs.existsSync(instructionsPath) ? fs.readFileSync(instructionsPath, 'utf8') : '');
   const parsed = parseToml(before);
-  if (!['openai', 'opencodex'].includes(parsed.model_provider ?? 'openai')) throw new Error('An unrelated custom provider is active; refusing to replace it');
+  if (!['openai', 'deepcodex'].includes(parsed.model_provider ?? 'openai')) throw new Error('An unrelated custom provider is active; refusing to replace it');
   if (parsed.openai_base_url || parsed.chatgpt_base_url) throw new Error('An existing endpoint override needs an explicit integration plan');
   fs.mkdirSync(STATE, { recursive: true, mode: 0o700 });
   fs.chmodSync(STATE, 0o700);
-  const runtime = path.join(os.homedir(), '.local/share/opencodex/runtime');
+  const runtime = path.join(os.homedir(), '.local/share/deepcodex/runtime');
   copyRuntime(ROOT, runtime);
   const executable = createServiceApp(runtime, config.service_label);
   let catalog;
@@ -233,18 +223,18 @@ export async function install() {
     base_instructions: fs.readFileSync(path.join(ROOT, 'prompts/worker.md'), 'utf8') };
   privateWrite(path.join(STATE, 'models.json'), JSON.stringify({ models: [...nativeModels, child] }));
   Object.assign(config, { native_models: nativeModels.map(entry => entry.slug), child_model: child.slug,
-    deepseek_url: original.codex.model_providers['opencodex-deepseek'].base_url + '/responses',
+    deepseek_url: original.codex.model_providers['deepcodex-deepseek'].base_url + '/responses',
     receipts: path.join(STATE, 'receipts.jsonl'), markers: [] });
   const statePath = path.join(STATE, 'state.json');
   const capability = fs.existsSync(statePath) ? readJson(statePath).capability : randomBytes(32).toString('base64url');
   const state = { config, capability, node: process.execPath, runtime, configPath };
   const sections = {
-    '': { model_provider: 'opencodex', model_catalog_json: path.join(STATE, 'models.json') },
+    '': { model_provider: 'deepcodex', model_catalog_json: path.join(STATE, 'models.json') },
     agents: { enabled: true, default_subagent_model: child.slug, default_subagent_reasoning_effort: 'high' },
     features: { multi_agent: true, multi_agent_v2: true },
-    'model_providers.opencodex': { name: 'DeepCodex', base_url: `http://127.0.0.1:${config.port}`, wire_api: 'responses',
+    'model_providers.deepcodex': { name: 'DeepCodex', base_url: `http://127.0.0.1:${config.port}`, wire_api: 'responses',
       requires_openai_auth: true, supports_websockets: false, request_max_retries: 0, stream_max_retries: 0, stream_idle_timeout_ms: config.request_timeout_ms },
-    'model_providers.opencodex.http_headers': { 'x-opencodex-pilot': capability },
+    'model_providers.deepcodex.http_headers': { 'x-deepcodex-pilot': capability },
   };
   let updated = mergeConfig(before, sections);
   privateWrite(path.join(STATE, 'config.proposed.toml'), updated);
@@ -321,7 +311,7 @@ export function uninstall() {
   }
   const instructionsPath = path.join(path.dirname(configPath), 'AGENTS.md');
   mergeAgentInstructions(fs.existsSync(instructionsPath) ? fs.readFileSync(instructionsPath, 'utf8') : '', { remove: true });
-  const runtime = path.join(os.homedir(), '.local/share/opencodex/runtime');
+  const runtime = path.join(os.homedir(), '.local/share/deepcodex/runtime');
   if (state.runtime !== runtime) throw new Error('Unexpected router runtime path; uninstall stopped');
   const label = readJson(path.join(ROOT, 'config/desktop.json')).service_label;
   if (state.config.service_label !== label) throw new Error('Unexpected router service label; uninstall stopped');

@@ -6,7 +6,7 @@ import { NamespaceToolCallTransform } from '../vendor/codex-router/namespace-rel
 
 test('native credential forwarding excludes local capabilities and unrelated headers', () => {
   assert.deepEqual(nativeHeaders({ authorization: 'Bearer test', 'chatgpt-account-id': 'account',
-    'x-opencodex-pilot': 'local-secret', cookie: 'private-cookie', host: 'localhost' }), {
+    'x-deepcodex-pilot': 'local-secret', cookie: 'private-cookie', host: 'localhost' }), {
     'content-type': 'application/json', accept: 'text/event-stream',
     authorization: 'Bearer test', 'chatgpt-account-id': 'account',
   });

@@ -15,7 +15,7 @@ Commands:
   pilot    Test native delegation (consumes Codex and DeepSeek usage)
 
 Requires macOS, Node.js >=22.15 and a compatible Codex CLI (PATH or Desktop bundle).
-Run deepcodex configure to save the DeepSeek key in ~/.config/opencodex/.env.
+Run deepcodex configure to save the DeepSeek key in ~/.config/deepcodex/.env.
 Run deepcodex install after installing this npm package to activate the router
 and install or update the DeepCodex plugin, including its icon and skill.
 Use deepcodex <command> --help for command options.

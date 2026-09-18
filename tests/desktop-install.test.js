@@ -8,8 +8,8 @@ import { copyRuntime } from '../scripts/desktop.js';
 import { parseToml } from '../scripts/toml.js';
 import { ROOT } from '../scripts/worker.js';
 
-function fixture(t, healthy, { bundled = false, incompatible = false, pluginFailure = false, noPluginSupport = false, legacy = false, legacyMarketplace = true, stopFailure = false, startFailure = false, registrationFailure = false, instructions, customCodexHome = false } = {}) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'opencodex-install-')));
+function fixture(t, healthy, { marketplace = false, bundled = false, incompatible = false, pluginFailure = false, noPluginSupport = false, stopFailure = false, startFailure = false, registrationFailure = false, instructions, customCodexHome = false } = {}) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-install-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, "home & user's");
   const source = path.join(root, 'source');
@@ -23,15 +23,13 @@ function fixture(t, healthy, { bundled = false, incompatible = false, pluginFail
   const desktop = JSON.parse(fs.readFileSync(desktopFile));
   desktop.startup_timeout_seconds = 0;
   fs.writeFileSync(desktopFile, JSON.stringify(desktop));
-  const original = '# Preserve this\nmodel="gpt-6-astra"\n[mcp_servers.example]\ncommand="example"\n' +
-    (legacy ? '\n[plugins."opencodex@personal"]\nenabled = true\n' : '');
+  const original = '# Preserve this\nmodel="gpt-6-astra"\n[mcp_servers.example]\ncommand="example"\n';
   const configPath = path.join(codexHome, 'config.toml');
   fs.writeFileSync(configPath, original);
-  if (legacy && legacyMarketplace) {
+  if (marketplace) {
     fs.mkdirSync(path.join(home, '.agents/plugins'), { recursive: true });
     fs.writeFileSync(path.join(home, '.agents/plugins/marketplace.json'), JSON.stringify({
       name: 'personal', interface: { displayName: 'My plugins' }, plugins: [
-        { name: 'opencodex', source: { source: 'local', path: './plugins/opencodex' } },
         { name: 'unrelated', source: { source: 'local', path: './plugins/unrelated' } },
       ],
     }));
@@ -48,12 +46,6 @@ function fixture(t, healthy, { bundled = false, incompatible = false, pluginFail
       const file = ${JSON.stringify(configPath)};
       const config = fs.readFileSync(file, 'utf8');
       if (!config.includes('[plugins."' + args[2] + '"]')) fs.appendFileSync(file, '\\n[plugins."' + args[2] + '"]\\nenabled = true\\n');
-      console.log(JSON.stringify({pluginId:args[2]}));
-    }
-    else if (args.join(' ') === 'plugin remove opencodex@personal --json') {
-      const fs = require('node:fs');
-      const file = ${JSON.stringify(configPath)};
-      fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('\\n[plugins."opencodex@personal"]\\nenabled = true\\n', ''));
       console.log(JSON.stringify({pluginId:args[2]}));
     }
     else process.exit(9);
@@ -112,18 +104,18 @@ test('installation associates the LaunchAgent with a branded app that runs the c
   const parsed = parseToml(fs.readFileSync(configPath, 'utf8'));
   assert.equal(parsed.model, 'gpt-6-astra');
   assert.equal(parsed.mcp_servers.example.command, 'example');
-  assert.equal(parsed.model_provider, 'opencodex');
+  assert.equal(parsed.model_provider, 'deepcodex');
   assert.equal(parsed.plugins['deepcodex@personal'].enabled, true);
   const plugin = path.join(home, 'plugins/deepcodex');
   const manifest = JSON.parse(fs.readFileSync(path.join(plugin, '.codex-plugin/plugin.json')));
   assert.deepEqual(fs.readFileSync(path.join(plugin, manifest.interface.logo)), fs.readFileSync(path.join(ROOT, manifest.interface.logo)));
-  assert.equal(fs.readFileSync(path.join(home, '.config/opencodex/desktop/config.before.toml'), 'utf8'), original);
+  assert.equal(fs.readFileSync(path.join(home, '.config/deepcodex/desktop/config.before.toml'), 'utf8'), original);
   assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap']);
   const plist = path.join(home, 'Library/LaunchAgents/com.deepcodex.router.plist');
   const converted = spawnSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', plist], { encoding: 'utf8' });
   assert.equal(converted.status, 0, converted.stderr);
   const definition = JSON.parse(converted.stdout);
-  const app = path.join(home, '.local/share/opencodex/runtime/DeepCodex.app');
+  const app = path.join(home, '.local/share/deepcodex/runtime/DeepCodex.app');
   const info = spawnSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', path.join(app, 'Contents/Info.plist')], { encoding: 'utf8' });
   assert.equal(info.status, 0, info.stderr);
   const bundle = JSON.parse(info.stdout);
@@ -220,24 +212,13 @@ test('plugin install failure is reported and stops the attempted service', t => 
   assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap', 'bootout']);
 });
 
-test('installation replaces the legacy plugin and preserves unrelated marketplace entries', t => {
-  const { home, configPath, result } = fixture(t, true, { legacy: true });
+test('installation preserves unrelated marketplace entries', t => {
+  const { home, result } = fixture(t, true, { marketplace: true });
   assert.equal(result.status, 0, result.stderr);
-  const config = parseToml(fs.readFileSync(configPath, 'utf8'));
-  assert.equal(Object.hasOwn(config.plugins, 'opencodex@personal'), false);
-  assert.equal(config.plugins['deepcodex@personal'].enabled, true);
   const marketplace = JSON.parse(fs.readFileSync(path.join(home, '.agents/plugins/marketplace.json')));
   assert.equal(marketplace.interface.displayName, 'My plugins');
   assert.deepEqual(marketplace.plugins.map(plugin => plugin.name), ['unrelated', 'deepcodex']);
   assert.deepEqual(marketplace.plugins[0], { name: 'unrelated', source: { source: 'local', path: './plugins/unrelated' } });
-});
-
-test('installation removes an enabled legacy plugin whose marketplace entry is missing', t => {
-  const { configPath, result } = fixture(t, true, { legacy: true, legacyMarketplace: false });
-  assert.equal(result.status, 0, result.stderr);
-  const config = parseToml(fs.readFileSync(configPath, 'utf8'));
-  assert.deepEqual(Object.keys(config.plugins), ['deepcodex@personal']);
-  assert.equal(config.plugins['deepcodex@personal'].enabled, true);
 });
 
 test('reinstallation refreshes plugin content without a package version change or duplicate entries', t => {
@@ -301,7 +282,7 @@ test('malformed instruction markers stop installation before changing config or 
 test('uninstall restores config, removes runtime and service, preserves credentials and is repeatable', t => {
   const installed = fixture(t, true);
   assert.equal(installed.result.status, 0, installed.result.stderr);
-  const credentials = path.join(installed.home, '.config/opencodex/.env');
+  const credentials = path.join(installed.home, '.config/deepcodex/.env');
   fs.writeFileSync(credentials, 'fixture-credential');
   const result = removeInstallation(installed);
   assert.equal(result.status, 0, result.stderr);
@@ -312,7 +293,7 @@ test('uninstall restores config, removes runtime and service, preserves credenti
   const registrations = fs.readFileSync(path.join(path.dirname(installed.home), 'registration.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   assert.deepEqual(registrations.map(args => args[0]), ['-f', '-u']);
   assert.equal(registrations[0][1], registrations[1][1]);
-  for (const relative of ['.config/opencodex/desktop', '.local/share/opencodex/runtime', 'Library/LaunchAgents/com.deepcodex.router.plist']) {
+  for (const relative of ['.config/deepcodex/desktop', '.local/share/deepcodex/runtime', 'Library/LaunchAgents/com.deepcodex.router.plist']) {
     assert.equal(fs.existsSync(path.join(installed.home, relative)), false);
   }
   const repeated = removeInstallation(installed);
@@ -328,7 +309,7 @@ test('uninstall refuses changed config before stopping the service or deleting f
   assert.equal(result.status, 1);
   assert.match(result.stderr, /configuration changed/);
   assert.equal(fs.readFileSync(installed.configPath, 'utf8'), changed);
-  assert.equal(fs.existsSync(path.join(installed.home, '.local/share/opencodex/runtime')), true);
+  assert.equal(fs.existsSync(path.join(installed.home, '.local/share/deepcodex/runtime')), true);
   const calls = fs.readFileSync(path.join(path.dirname(installed.home), 'launchctl.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap']);
 });
@@ -341,7 +322,7 @@ test('failed service stop retains runtime and permits retry after config restora
   assert.equal(failed.status, 1);
   assert.match(failed.stderr, /Cannot stop/);
   assert.equal(fs.readFileSync(installed.configPath, 'utf8'), installed.original);
-  assert.equal(fs.existsSync(path.join(installed.home, '.local/share/opencodex/runtime')), true);
+  assert.equal(fs.existsSync(path.join(installed.home, '.local/share/deepcodex/runtime')), true);
   fs.writeFileSync(launchctl, '#!/bin/sh\nexit 3\n');
   const retried = removeInstallation(installed);
   assert.equal(retried.status, 0, retried.stderr);

@@ -125,7 +125,7 @@ export async function run() {
   if (!statSync(authSource, { throwIfNoEntry: false })?.isFile()) {
     throw new Error('Pilot requires the existing Codex auth.json login');
   }
-  const runDir = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'opencodex-pilot-')));
+  const runDir = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'deepcodex-pilot-')));
   const home = path.join(runDir, 'codex-home');
   const workspace = path.join(runDir, 'workspace');
   mkdirSync(home, { mode: 0o700, recursive: true });
@@ -168,19 +168,19 @@ export async function run() {
       emit({ event: 'pilot.router_started', ...ready, cwd: workspace, owner: 'DeepCodex isolated pilot',
         artifacts: runDir });
       const values = { ...workerConfig.codex };
-      Object.assign(values, { model: config.parent_model, model_provider: 'opencodex-pilot',
+      Object.assign(values, { model: config.parent_model, model_provider: 'deepcodex-pilot',
         model_reasoning_effort: config.parent_effort, model_catalog_json: catalog,
         cli_auth_credentials_store: 'file',
         agents: { enabled: true, max_concurrent_threads_per_session: 1 } });
       values.features = { ...values.features, multi_agent: true, multi_agent_v2: true,
         enable_request_compression: false };
-      values.model_providers = { 'opencodex-pilot': {
+      values.model_providers = { 'deepcodex-pilot': {
         name: 'DeepCodex isolated pilot',
         base_url: `http://127.0.0.1:${ready.port}`,
         wire_api: 'responses',
         requires_openai_auth: true,
         supports_websockets: false,
-        http_headers: { 'x-opencodex-pilot': capability },
+        http_headers: { 'x-deepcodex-pilot': capability },
         request_max_retries: 0,
         stream_max_retries: 0,
         stream_idle_timeout_ms: config.request_timeout_ms,

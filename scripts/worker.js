@@ -153,7 +153,7 @@ export function checkProjectConfig(cwd) {
 // symlinks, is owned by this user and stays 0600. node:sqlite is loaded here so help and doctor stay
 // free of its experimental warning.
 export async function workerLock() {
-  const file = path.join(os.tmpdir(), `opencodex-worker-${process.getuid()}.lock`);
+  const file = path.join(os.tmpdir(), `deepcodex-worker-${process.getuid()}.lock`);
   const fd = fs.openSync(file, fs.constants.O_CREAT | fs.constants.O_RDWR | fs.constants.O_NOFOLLOW, 0o600);
   try {
     const stat = fs.fstatSync(fd);
@@ -276,7 +276,7 @@ export async function runWorker(binary, config, cwd, task, write, env) {
   const lock = await workerLock();
   let runDir = null;
   try {
-    runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencodex-run-'));
+    runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-run-'));
     const { args, finalPath } = buildCommand(binary, config, cwd, write, runDir);
     const taskPath = path.join(runDir, 'task.txt');
     const outPath = path.join(runDir, 'events.jsonl');

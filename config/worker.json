@@ -1,13 +1,13 @@
 {
-  "credentials": {"env_file": "~/.config/opencodex/.env"},
+  "credentials": {"env_file": "~/.config/deepcodex/.env"},
   "codex": {
     "model": "deepseek-flash",
-    "model_provider": "opencodex-deepseek",
+    "model_provider": "deepcodex-deepseek",
     "model_reasoning_effort": "high",
     "web_search": "disabled",
     "approval_policy": "never",
     "model_providers": {
-      "opencodex-deepseek": {
+      "deepcodex-deepseek": {
         "name": "DeepSeek direct",
         "base_url": "https://api.deepseek.com",
         "wire_api": "responses",
@@ -52,7 +52,7 @@
     "supported_in_api": true,
     "experimental_supported_tools": [],
     "supports_image_detail_original": false,
-    "comp_hash": "opencodex-0.1.0",
+    "comp_hash": "deepcodex-0.1.0",
     "priority": 1,
     "context_window": 1048576,
     "max_context_window": 1048576,

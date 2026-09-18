@@ -12,7 +12,7 @@ const BIN = fileURLToPath(new URL('../bin/deepcodex.js', import.meta.url));
 const FAKE = fs.readFileSync(new URL('./fake-codex.js', import.meta.url), 'utf8');
 
 const previousTmpdir = process.env.TMPDIR;
-const suiteTmpdir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencodex-worker-tests-'));
+const suiteTmpdir = fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-worker-tests-'));
 process.env.TMPDIR = suiteTmpdir;
 after(() => {
   if (previousTmpdir === undefined) delete process.env.TMPDIR;
@@ -60,7 +60,7 @@ async function cancelAndCollect(t, command, env, box, pidFile) {
 // The fixture binary is the fake Codex with this interpreter in its shebang, so no provider and no
 // real Codex CLI are ever involved.
 function fixture(t) {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'opencodex-test-')));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-test-')));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const binary = path.join(dir, 'codex');
   fs.writeFileSync(binary, FAKE.replace('#!/usr/bin/env node', `#!${process.execPath}`));
@@ -93,7 +93,7 @@ test('success preserves stdin and scopes the process environment', async (t) => 
   assert.ok(body.argv.includes('--ignore-user-config'));
   assert.ok(body.argv.includes('read-only'));
   assert.ok(body.argv.includes('model="deepseek-flash"'));
-  assert.ok(body.argv.includes('model_providers.opencodex-deepseek.base_url="https://api.deepseek.com"'));
+  assert.ok(body.argv.includes('model_providers.deepcodex-deepseek.base_url="https://api.deepseek.com"'));
   assert.equal(result.usage.input_tokens, 12);
   assert.ok(!JSON.stringify(worker.redact(result, 'test-secret')).includes('test-secret'));
 });
@@ -286,8 +286,8 @@ test('cli rejects a ticket that is not valid utf-8', (t) => {
 test('cli run loads the ticket file and redacts the key', (t) => {
   const box = fixture(t);
   const home = path.join(box.dir, 'home');
-  fs.mkdirSync(path.join(home, '.config/opencodex'), { recursive: true });
-  fs.writeFileSync(path.join(home, '.config/opencodex/.env'), 'DEEPSEEK_API_KEY="file-secret"\n');
+  fs.mkdirSync(path.join(home, '.config/deepcodex'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.config/deepcodex/.env'), 'DEEPSEEK_API_KEY="file-secret"\n');
   const ticket = path.join(box.dir, 'ticket.txt');
   fs.writeFileSync(ticket, 'Read-only fixture');
   const result = spawnSync(process.execPath, [WORKER, 'run', '--cwd', box.dir, '--task-file', ticket], {
@@ -328,7 +328,7 @@ test('cancel works through the deepcodex cli, which imports main', async (t) => 
 });
 
 test('help and run flags stay available without loading sqlite', (t) => {
-  const empty = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'opencodex-empty-')));
+  const empty = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-empty-')));
   t.after(() => fs.rmSync(empty, { recursive: true, force: true }));
   const help = spawnSync(process.execPath, [WORKER, '--help'], { encoding: 'utf8' });
   assert.equal(help.status, 0);

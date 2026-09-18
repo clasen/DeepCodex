@@ -13,7 +13,7 @@ const CLI = fileURLToPath(new URL('../bin/deepcodex.js', import.meta.url));
 const NAME = 'DEEPSEEK_API_KEY';
 
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencodex-credentials-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-credentials-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }
@@ -99,7 +99,7 @@ test('CLI rejects key arguments and piped input without disclosing or saving the
     });
     assert.equal(result.status, 1);
     assert.ok(!`${result.stdout}${result.stderr}`.includes('fixture-key'));
-    assert.equal(fs.existsSync(path.join(root, '.config/opencodex/.env')), false);
+    assert.equal(fs.existsSync(path.join(root, '.config/deepcodex/.env')), false);
   }
   const help = spawnSync(process.execPath, [CLI, 'configure', '--help'], { env: { HOME: root }, encoding: 'utf8' });
   assert.equal(help.status, 0, help.stderr);

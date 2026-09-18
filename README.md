@@ -43,20 +43,10 @@ pnpm install --frozen-lockfile
 npm install --global .
 ```
 
-### Upgrading from OpenCodex
-
-The npm package, command and plugin are now named `deepcodex`, and the service
-is `com.deepcodex.router`. Existing private paths (`~/.config/opencodex`,
-`~/.local/share/opencodex`) and provider IDs are retained, reusing your saved
-key and backup.
-
-Run `deepcodex doctor` and `deepcodex install` to refresh the runtime; there is
-no need to run `configure` again if your key is already saved.
-
 ### 1. `deepcodex configure`
 
 `configure` asks for the DeepSeek API key with hidden input on the terminal and
-stores it in `~/.config/opencodex/.env`. It creates the directory with mode
+stores it in `~/.config/deepcodex/.env`. It creates the directory with mode
 `0700` and the file with mode `0600`, and it writes the key as plaintext in that
 file rather than in the macOS keychain.
 
@@ -85,17 +75,16 @@ result confirms local prerequisites, not provider authentication or account cred
 `install` activates the desktop integration:
 
 - copies a stable runtime (scripts, config, prompts, vendor code and the bundled
-  dependency) to `~/.local/share/opencodex/runtime`;
+  dependency) to `~/.local/share/deepcodex/runtime`;
 - writes private state, the model catalog and receipts to
-  `~/.config/opencodex/desktop`;
+  `~/.config/deepcodex/desktop`;
 - installs and starts the `com.deepcodex.router` LaunchAgent, bound only to
   `127.0.0.1:4207`;
 - updates `~/.codex/config.toml` with the local provider, the subagent defaults
   and the generated model catalog, keeping a pre-install backup at
-  `~/.config/opencodex/desktop/config.before.toml`;
+  `~/.config/deepcodex/desktop/config.before.toml`;
 - registers and installs the bundled DeepCodex plugin in the personal marketplace,
-  including its current name, description, icon and delegation skill. An existing
-  local OpenCodex plugin in that marketplace is replaced after DeepCodex installs;
+  including its current name, description, icon and delegation skill;
 - adds a marked DeepCodex block to the global `AGENTS.md` in `CODEX_HOME`
   (default `~/.codex`) when that block is absent. It asks Codex to consider
   delegation for suitable independent subtasks. Reinstallation preserves the
@@ -120,7 +109,7 @@ has not changed. Other personal marketplace entries are preserved.
 
 | Command | Purpose |
 | --- | --- |
-| `deepcodex configure` | Prompt for the DeepSeek API key and write `~/.config/opencodex/.env`. |
+| `deepcodex configure` | Prompt for the DeepSeek API key and write `~/.config/deepcodex/.env`. |
 | `deepcodex doctor` | Check Codex CLI compatibility and credential presence without inference. |
 | `deepcodex install` | Install the router runtime, LaunchAgent, Codex settings and current DeepCodex plugin. |
 | `deepcodex uninstall` | Stop and remove the router, restoring the saved Codex configuration. Credentials are preserved. Refuses if config changed since installation. Restart Codex afterward; remove the npm package separately with `npm uninstall -g deepcodex`. |
@@ -167,7 +156,7 @@ why a delegated task consumes both Codex quota and DeepSeek API usage.
 ### Local data
 
 The router writes bounded receipts to
-`~/.config/opencodex/desktop/receipts.jsonl`: routing decisions, model names,
+`~/.config/deepcodex/desktop/receipts.jsonl`: routing decisions, model names,
 tool names, task counts and token usage. Prompts, tool arguments and credentials
 are not recorded. On errors, the receipt message has the DeepSeek key and the
 capability token redacted.
@@ -179,7 +168,7 @@ pnpm test
 ```
 
 The default suite is offline: it uses fixtures and spends no provider usage. The
-Codex transport test is skipped unless `OPENCODEX_TEST_CODEX` points at a real
+Codex transport test is skipped unless `DEEPCODEX_TEST_CODEX` points at a real
 `codex` binary; when it is set, that test launches the real CLI against a local
 fixture server. Treat it as an optional, deliberate opt-in rather than part of a
 routine run.
@@ -188,10 +177,10 @@ routine run.
 
 - The router listens only on `127.0.0.1` and rejects requests without the
   generated capability token.
-- Credentials live in `~/.config/opencodex/.env` (`0700` directory, `0600`
+- Credentials live in `~/.config/deepcodex/.env` (`0700` directory, `0600`
   file), outside the repository.
 - Receipts and router state live in the private `0700` directory
-  `~/.config/opencodex/desktop`.
+  `~/.config/deepcodex/desktop`.
 - Subagents inherit Codex permissions. A ticket's allowed files are instructions
   to the worker, not a filesystem sandbox.
 

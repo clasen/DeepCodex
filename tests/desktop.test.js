@@ -10,7 +10,7 @@ import { parseToml } from '../scripts/toml.js';
 import { ROOT } from '../scripts/worker.js';
 
 function temporary(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opencodex-desktop-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-desktop-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }
@@ -41,19 +41,19 @@ test('incomplete, reversed or duplicate instruction markers fail without returni
 
 test('merging preserves unrelated settings, comments and is idempotent', () => {
   const original = '# User settings\nmodel="gpt-6-astra"\n[features]\nmemories=true\n[features.context_management]\nexperimental_mode=true\n[mcp_servers.example]\ncommand="example"\n';
-  const result = mergeConfig(original, { '': { model_provider: 'opencodex' }, features: { multi_agent: true }, agents: { default_subagent_model: 'deepseek-flash' } });
+  const result = mergeConfig(original, { '': { model_provider: 'deepcodex' }, features: { multi_agent: true }, agents: { default_subagent_model: 'deepseek-flash' } });
   const data = parseToml(result);
   assert.equal(data.mcp_servers.example.command, 'example');
   assert.equal(data.features.memories, true);
   assert.equal(data.features.context_management.experimental_mode, true);
   assert.equal(data.model, 'gpt-6-astra');
   assert.match(result, /# User settings/);
-  assert.equal(mergeConfig(result, { '': { model_provider: 'opencodex' } }), result);
+  assert.equal(mergeConfig(result, { '': { model_provider: 'deepcodex' } }), result);
 });
 
 test('merging without a trailing newline preserves the preceding value', () => {
-  assert.deepEqual(parseToml(mergeConfig('model="native"', { '': { model_provider: 'opencodex' } })), {
-    model: 'native', model_provider: 'opencodex',
+  assert.deepEqual(parseToml(mergeConfig('model="native"', { '': { model_provider: 'deepcodex' } })), {
+    model: 'native', model_provider: 'deepcodex',
   });
 });
 
