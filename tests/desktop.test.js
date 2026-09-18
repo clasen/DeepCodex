@@ -77,7 +77,7 @@ test('private writes replace atomically with restricted permissions and reject s
   assert.equal(fs.readFileSync(victim, 'utf8'), 'preserved');
 });
 
-test('LaunchAgent plist preserves escaped paths and native value types', t => {
+test('LaunchAgent plist preserves escaped paths and native value types', { skip: process.platform !== 'darwin' }, t => {
   const dir = temporary(t);
   const definition = { Label: 'example', ProgramArguments: ['/a & b/<node>', '"quoted"'], RunAtLoad: true, KeepAlive: false, ThrottleInterval: 10 };
   const file = path.join(dir, 'agent.plist');

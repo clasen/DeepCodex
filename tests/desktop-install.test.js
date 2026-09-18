@@ -3,12 +3,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import test from 'node:test';
+import nodeTest from 'node:test';
+const test = (name, fn) => nodeTest(name, { skip: process.platform === 'win32' }, fn);
+const macTest = (name, fn) => nodeTest(name, { skip: process.platform !== 'darwin' }, fn);
 import { copyRuntime } from '../scripts/desktop.js';
 import { parseToml } from '../scripts/toml.js';
 import { ROOT } from '../scripts/worker.js';
 
-function fixture(t, healthy, { marketplace = false, bundled = false, incompatible = false, pluginFailure = false, noPluginSupport = false, stopFailure = false, startFailure = false, registrationFailure = false, instructions, customCodexHome = false } = {}) {
+function fixture(t, healthy, { marketplace = false, bundled = false, incompatible = false, pluginFailure = false, noPluginSupport = false, stopFailure = false, startFailure = false, registrationFailure = false, instructions, customCodexHome = false, platform = 'darwin' } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-install-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, "home & user's");
@@ -73,8 +75,13 @@ function fixture(t, healthy, { marketplace = false, bundled = false, incompatibl
     import childProcess from 'node:child_process';
     import fs from 'node:fs';
     import { syncBuiltinESMExports } from 'node:module';
+    Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} });
     const spawnSync = childProcess.spawnSync;
     childProcess.spawnSync = (command, args, options) => {
+      if (command === 'systemctl') {
+        fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + '\\n');
+        return { status: 0, stderr: '' };
+      }
       if (command.endsWith('/lsregister')) {
         fs.appendFileSync(${JSON.stringify(path.join(root, 'registration.jsonl'))}, JSON.stringify(args) + '\\n');
         return { status: ${registrationFailure ? 1 : 0}, stderr: ${JSON.stringify(registrationFailure ? 'fixture registration failure' : '')} };
@@ -91,7 +98,7 @@ function fixture(t, healthy, { marketplace = false, bundled = false, incompatibl
   return { home, source, configPath, original, result, run, calls: fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse) : [] };
 }
 
-test('installation associates the LaunchAgent with a branded app that runs the copied runtime', t => {
+macTest('installation associates the LaunchAgent with a branded app that runs the copied runtime', t => {
   const { home, source, configPath, original, result, calls } = fixture(t, true);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /✓ DeepCodex installed successfully/);
@@ -137,7 +144,7 @@ test('installation associates the LaunchAgent with a branded app that runs the c
   assert.match(runtime.stdout, /Usage: deepcodex/);
 });
 
-test('app registration failure prevents service startup and configuration changes', t => {
+macTest('app registration failure prevents service startup and configuration changes', t => {
   const { result, configPath, original, calls } = fixture(t, true, { registrationFailure: true });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Cannot register DeepCodex app: fixture registration failure/);
@@ -145,14 +152,14 @@ test('app registration failure prevents service startup and configuration change
   assert.deepEqual(calls, []);
 });
 
-test('installation uses the Desktop CLI without a codex command on PATH', t => {
+macTest('installation uses the Desktop CLI without a codex command on PATH', t => {
   const { result, calls } = fixture(t, true, { bundled: true });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /DeepCodex installed successfully/);
   assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap']);
 });
 
-test('installation stops the current service before starting it', t => {
+macTest('installation stops the current service before starting it', t => {
   const { home, result, calls } = fixture(t, true);
   assert.equal(result.status, 0, result.stderr);
   const domain = `gui/${process.getuid()}`;
@@ -162,7 +169,7 @@ test('installation stops the current service before starting it', t => {
   ]);
 });
 
-test('a failed service stop prevents bootstrap and reports the launchctl error', t => {
+macTest('a failed service stop prevents bootstrap and reports the launchctl error', t => {
   const { result, configPath, original, calls } = fixture(t, true, { stopFailure: true });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Cannot stop com.deepcodex.router: Boot-out failed: 1: Operation not permitted/);
@@ -170,14 +177,14 @@ test('a failed service stop prevents bootstrap and reports the launchctl error',
   assert.deepEqual(calls.map(args => args[0]), ['bootout']);
 });
 
-test('a failed bootstrap reports its actual error and preserves configuration', t => {
+macTest('a failed bootstrap reports its actual error and preserves configuration', t => {
   const { result, configPath, original } = fixture(t, true, { startFailure: true });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Cannot start DeepCodex LaunchAgent: Bootstrap failed: 5: Input\/output error/);
   assert.equal(fs.readFileSync(configPath, 'utf8'), original);
 });
 
-test('incompatible CLI explains the prerequisite failure before modifying configuration', t => {
+macTest('incompatible CLI explains the prerequisite failure before modifying configuration', t => {
   const { configPath, original, result, calls } = fixture(t, true, { incompatible: true });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /DeepCodex prerequisites are not ready:.*incompatible.*--strict-config/);
@@ -185,7 +192,7 @@ test('incompatible CLI explains the prerequisite failure before modifying config
   assert.deepEqual(calls, []);
 });
 
-test('unhealthy service leaves user configuration unchanged and stops the attempted service', t => {
+macTest('unhealthy service leaves user configuration unchanged and stops the attempted service', t => {
   const { configPath, original, result, calls } = fixture(t, false);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /did not become healthy/);
@@ -195,7 +202,7 @@ test('unhealthy service leaves user configuration unchanged and stops the attemp
   assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap', 'bootout']);
 });
 
-test('missing plugin support fails before starting a service or changing user config', t => {
+macTest('missing plugin support fails before starting a service or changing user config', t => {
   const { result, configPath, original, calls } = fixture(t, true, { noPluginSupport: true });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /must support plugin add/);
@@ -203,7 +210,7 @@ test('missing plugin support fails before starting a service or changing user co
   assert.deepEqual(calls, []);
 });
 
-test('plugin install failure is reported and stops the attempted service', t => {
+macTest('plugin install failure is reported and stops the attempted service', t => {
   const { result, configPath, original, calls } = fixture(t, true, { pluginFailure: true });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Cannot add Codex plugin/);
@@ -212,7 +219,7 @@ test('plugin install failure is reported and stops the attempted service', t => 
   assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap', 'bootout']);
 });
 
-test('installation preserves unrelated marketplace entries', t => {
+macTest('installation preserves unrelated marketplace entries', t => {
   const { home, result } = fixture(t, true, { marketplace: true });
   assert.equal(result.status, 0, result.stderr);
   const marketplace = JSON.parse(fs.readFileSync(path.join(home, '.agents/plugins/marketplace.json')));
@@ -221,7 +228,7 @@ test('installation preserves unrelated marketplace entries', t => {
   assert.deepEqual(marketplace.plugins[0], { name: 'unrelated', source: { source: 'local', path: './plugins/unrelated' } });
 });
 
-test('reinstallation refreshes plugin content without a package version change or duplicate entries', t => {
+macTest('reinstallation refreshes plugin content without a package version change or duplicate entries', t => {
   const { home, source, configPath, result, run } = fixture(t, true);
   assert.equal(result.status, 0, result.stderr);
   const relative = '.codex-plugin/plugin.json';
@@ -250,7 +257,7 @@ function removeInstallation(fixture) {
   });
 }
 
-test('global instructions respect CODEX_HOME, preserve edits on reinstall, and remove only the managed block', t => {
+macTest('global instructions respect CODEX_HOME, preserve edits on reinstall, and remove only the managed block', t => {
   const original = '# My rules\nPreserve my settings.';
   const installed = fixture(t, true, { instructions: original, customCodexHome: true });
   assert.equal(installed.result.status, 0, installed.result.stderr);
@@ -269,7 +276,7 @@ test('global instructions respect CODEX_HOME, preserve edits on reinstall, and r
   assert.equal(fs.readFileSync(filename, 'utf8'), original + '\n# Later user edit\n');
 });
 
-test('malformed instruction markers stop installation before changing config or starting the service', t => {
+macTest('malformed instruction markers stop installation before changing config or starting the service', t => {
   const instructions = '# My rules\n<!-- DEEPCODEX_START -->\n';
   const { result, configPath, original, calls } = fixture(t, true, { instructions });
   assert.equal(result.status, 1);
@@ -279,7 +286,7 @@ test('malformed instruction markers stop installation before changing config or 
   assert.deepEqual(calls, []);
 });
 
-test('uninstall restores config, removes runtime and service, preserves credentials and is repeatable', t => {
+macTest('uninstall restores config, removes runtime and service, preserves credentials and is repeatable', t => {
   const installed = fixture(t, true);
   assert.equal(installed.result.status, 0, installed.result.stderr);
   const credentials = path.join(installed.home, '.config/deepcodex/.env');
@@ -301,7 +308,7 @@ test('uninstall restores config, removes runtime and service, preserves credenti
   assert.equal(JSON.parse(repeated.stdout).status, 'not_installed');
 });
 
-test('uninstall refuses changed config before stopping the service or deleting files', t => {
+macTest('uninstall refuses changed config before stopping the service or deleting files', t => {
   const installed = fixture(t, true);
   const changed = fs.readFileSync(installed.configPath, 'utf8') + '\n# New user setting\n';
   fs.writeFileSync(installed.configPath, changed);
@@ -314,7 +321,7 @@ test('uninstall refuses changed config before stopping the service or deleting f
   assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap']);
 });
 
-test('failed service stop retains runtime and permits retry after config restoration', t => {
+macTest('failed service stop retains runtime and permits retry after config restoration', t => {
   const installed = fixture(t, true);
   const launchctl = path.join(path.dirname(installed.home), 'bin/launchctl');
   fs.writeFileSync(launchctl, '#!/bin/sh\nexit 1\n');
@@ -326,4 +333,27 @@ test('failed service stop retains runtime and permits retry after config restora
   fs.writeFileSync(launchctl, '#!/bin/sh\nexit 3\n');
   const retried = removeInstallation(installed);
   assert.equal(retried.status, 0, retried.stderr);
+});
+
+
+test('Linux installation and removal use the user service manager and preserve config', t => {
+  const installed = fixture(t, true, { platform: 'linux' });
+  assert.equal(installed.result.status, 0, installed.result.stderr);
+  assert.equal(parseToml(fs.readFileSync(installed.configPath, 'utf8')).model_provider, 'deepcodex');
+  assert.deepEqual(installed.calls.map(args => args[1]), ['daemon-reload', 'stop', 'enable']);
+  const unit = path.join(installed.home, '.config/systemd/user/com.deepcodex.router.service');
+  assert.match(fs.readFileSync(unit, 'utf8'), /Restart=always/);
+  assert.equal(fs.existsSync(path.join(installed.home, '.local/share/deepcodex/runtime/DeepCodex.app')), false);
+  const removed = removeInstallation(installed);
+  assert.equal(removed.status, 0, removed.stderr);
+  assert.equal(fs.readFileSync(installed.configPath, 'utf8'), installed.original);
+  assert.equal(fs.existsSync(unit), false);
+});
+
+test('Linux unhealthy service is disabled before user configuration is changed', t => {
+  const installed = fixture(t, false, { platform: 'linux' });
+  assert.equal(installed.result.status, 1);
+  assert.match(installed.result.stderr, /did not become healthy/);
+  assert.equal(fs.readFileSync(installed.configPath, 'utf8'), installed.original);
+  assert.deepEqual(installed.calls.at(-1), ['--user', 'disable', '--now', 'com.deepcodex.router.service']);
 });

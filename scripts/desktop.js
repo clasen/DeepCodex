@@ -9,6 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { ROOT, loadConfig, workerEnvironment, loadCredentials, doctor } from './worker.js';
 import { parseToml } from './toml.js';
 import { startPilot } from './pilot-router.js';
+import { userService } from './service.js';
 
 const STATE = path.join(os.homedir(), '.config/deepcodex/desktop');
 const LSREGISTER = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
@@ -189,7 +190,7 @@ export async function health(state) {
 }
 
 export async function install() {
-  if (process.platform !== 'darwin') throw new Error('The Desktop installer requires macOS');
+  if (!['darwin', 'linux', 'win32'].includes(process.platform)) throw new Error('DeepCodex supports macOS, Linux and Windows');
   const config = { ...readJson(path.join(ROOT, 'config/pilot.json')), ...readJson(path.join(ROOT, 'config/desktop.json')) };
   const original = loadConfig();
   const env = workerEnvironment(process.env);
@@ -209,7 +210,7 @@ export async function install() {
   fs.chmodSync(STATE, 0o700);
   const runtime = path.join(os.homedir(), '.local/share/deepcodex/runtime');
   copyRuntime(ROOT, runtime);
-  const executable = createServiceApp(runtime, config.service_label);
+  const executable = process.platform === 'darwin' ? createServiceApp(runtime, config.service_label) : null;
   let catalog;
   if (parsed.model_catalog_json && path.resolve(expandHome(parsed.model_catalog_json)) !== path.join(STATE, 'models.json')) {
     catalog = readJson(expandHome(parsed.model_catalog_json));
@@ -241,28 +242,30 @@ export async function install() {
   if (!fs.existsSync(path.join(STATE, 'config.before.toml'))) privateWrite(path.join(STATE, 'config.before.toml'), before);
   privateWrite(statePath, JSON.stringify(state));
   const label = config.service_label;
-  const plist = path.join(os.homedir(), 'Library/LaunchAgents', label + '.plist');
-  fs.mkdirSync(path.dirname(plist), { recursive: true });
-  privateWrite(plist, plistDocument({ Label: label, AssociatedBundleIdentifiers: [label], ProgramArguments: [executable, 'serve'],
-    WorkingDirectory: runtime, RunAtLoad: true, KeepAlive: true, ThrottleInterval: config.service_throttle_seconds,
-    StandardOutPath: path.join(STATE, 'service.log'), StandardErrorPath: path.join(STATE, 'service-errors.log'),
-    EnvironmentVariables: { HOME: os.homedir(), PATH: env.PATH } }));
-  const domain = `gui/${process.getuid()}`;
-  const stopped = spawnSync('launchctl', ['bootout', `${domain}/${label}`], { encoding: 'utf8' });
-  if (stopped.error || (stopped.status !== 0 && stopped.status !== 3)) {
-    throw new Error(`Cannot stop ${label}: ${stopped.error?.message || stopped.stderr.trim() || `launchctl exited ${stopped.status}`}`);
-  }
-  const bootstrap = spawnSync('launchctl', ['bootstrap', domain, plist], { encoding: 'utf8' });
-  if (bootstrap.error || bootstrap.status !== 0) {
-    throw new Error(`Cannot start DeepCodex LaunchAgent: ${bootstrap.error?.message || bootstrap.stderr.trim() || `launchctl exited ${bootstrap.status}`}`);
-  }
+  if (process.platform === 'darwin') {
+    const plist = path.join(os.homedir(), 'Library/LaunchAgents', label + '.plist');
+    fs.mkdirSync(path.dirname(plist), { recursive: true });
+    privateWrite(plist, plistDocument({ Label: label, AssociatedBundleIdentifiers: [label], ProgramArguments: [executable, 'serve'],
+      WorkingDirectory: runtime, RunAtLoad: true, KeepAlive: true, ThrottleInterval: config.service_throttle_seconds,
+      StandardOutPath: path.join(STATE, 'service.log'), StandardErrorPath: path.join(STATE, 'service-errors.log'),
+      EnvironmentVariables: { HOME: os.homedir(), PATH: env.PATH } }));
+    const domain = `gui/${process.getuid()}`;
+    const stopped = spawnSync('launchctl', ['bootout', `${domain}/${label}`], { encoding: 'utf8' });
+    if (stopped.error || (stopped.status !== 0 && stopped.status !== 3)) {
+      throw new Error(`Cannot stop ${label}: ${stopped.error?.message || stopped.stderr.trim() || `launchctl exited ${stopped.status}`}`);
+    }
+    const bootstrap = spawnSync('launchctl', ['bootstrap', domain, plist], { encoding: 'utf8' });
+    if (bootstrap.error || bootstrap.status !== 0) {
+      throw new Error(`Cannot start DeepCodex LaunchAgent: ${bootstrap.error?.message || bootstrap.stderr.trim() || `launchctl exited ${bootstrap.status}`}`);
+    }
+  } else userService('install', state, env);
   const deadline = Date.now() + config.startup_timeout_seconds * 1000;
   let report;
   while (!report) {
     try { report = await health(state); }
     catch {
       if (Date.now() >= deadline) {
-        spawnSync('launchctl', ['bootout', `${domain}/${label}`]);
+        stopService(state);
         throw new Error('Desktop router did not become healthy; user config unchanged');
       }
       await sleep(original.limits.poll_interval_seconds * 1000);
@@ -275,7 +278,7 @@ export async function install() {
     privateWrite(path.join(STATE, 'config.proposed.toml'), updated);
     updateAgentInstructions(configPath);
   } catch (error) {
-    spawnSync('launchctl', ['bootout', `${domain}/${label}`]);
+    stopService(state);
     throw error;
   }
   privateWrite(configPath, updated);
@@ -294,8 +297,15 @@ export async function install() {
   ].join('\n'));
 }
 
+function stopService(state) {
+  if (process.platform !== 'darwin') return userService('stop', state);
+  const stopped = spawnSync('launchctl', ['bootout', `gui/${process.getuid()}/${state.config.service_label}`]);
+  if (stopped.error || (stopped.status !== 0 && stopped.status !== 3)) {
+    throw new Error('Cannot stop DeepCodex LaunchAgent; runtime retained. Retry uninstall.');
+  }
+}
+
 export function uninstall() {
-  if (process.platform !== 'darwin') throw new Error('The Desktop uninstaller requires macOS');
   const statePath = path.join(STATE, 'state.json');
   if (!fs.existsSync(statePath)) {
     console.log(JSON.stringify({ status: 'not_installed' }));
@@ -315,17 +325,15 @@ export function uninstall() {
   if (state.runtime !== runtime) throw new Error('Unexpected router runtime path; uninstall stopped');
   const label = readJson(path.join(ROOT, 'config/desktop.json')).service_label;
   if (state.config.service_label !== label) throw new Error('Unexpected router service label; uninstall stopped');
-  const service = `gui/${process.getuid()}/${label}`;
   // Restore connectivity before stopping the router; a failed stop can be retried.
   if (current !== before) privateWrite(configPath, before);
-  const stopped = spawnSync('launchctl', ['bootout', service]);
-  if (stopped.error || (stopped.status !== 0 && stopped.status !== 3)) {
-    throw new Error('Cannot stop DeepCodex LaunchAgent; Codex settings restored, runtime retained. Retry uninstall.');
-  }
+  stopService(state);
   updateAgentInstructions(configPath, { remove: true });
-  fs.rmSync(path.join(os.homedir(), 'Library/LaunchAgents', label + '.plist'), { force: true });
-  const app = path.join(runtime, 'DeepCodex.app');
-  if (fs.existsSync(app)) registerServiceApp(app, '-u');
+  if (process.platform === 'darwin') {
+    fs.rmSync(path.join(os.homedir(), 'Library/LaunchAgents', label + '.plist'), { force: true });
+    const app = path.join(runtime, 'DeepCodex.app');
+    if (fs.existsSync(app)) registerServiceApp(app, '-u');
+  } else userService('remove', state);
   fs.rmSync(runtime, { recursive: true, force: true });
   fs.rmSync(STATE, { recursive: true, force: true });
   console.log(JSON.stringify({ status: 'uninstalled', restart_desktop_required: true, credentials_preserved: true }));
@@ -333,7 +341,7 @@ export function uninstall() {
 
 export async function main(args = process.argv.slice(2)) {
   if (args.includes('--help') || args.includes('-h')) {
-    console.log('Usage: deepcodex <install|uninstall|status>\nActivate or inspect the local macOS Desktop router.');
+    console.log('Usage: deepcodex <install|uninstall|status>\nActivate or inspect the local Desktop router.');
     return 0;
   }
   if (args.length !== 1 || !['install', 'uninstall', 'serve', 'status'].includes(args[0])) throw new Error('Expected install, uninstall, serve or status');

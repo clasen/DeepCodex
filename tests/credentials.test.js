@@ -11,6 +11,8 @@ import { readEnvKey } from '../scripts/worker.js';
 
 const CLI = fileURLToPath(new URL('../bin/deepcodex.js', import.meta.url));
 const NAME = 'DEEPSEEK_API_KEY';
+const WINDOWS_SID = 'S-1-5-21-999999999-888888888-777777777-1001';
+const WINDOWS_ACCOUNT = 'DESKTOP-TEST\\tester';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-credentials-'));
@@ -25,6 +27,27 @@ function terminal() {
   input.setRawMode = value => { input.isRaw = value; };
   let output = '';
   return { input, output: { isTTY: true, write: text => { output += text; } }, text: () => output };
+}
+
+// Simulates whoami and icacls so the Windows credential path runs on any host.
+function windowsExec() {
+  const acl = new Map();
+  const calls = [];
+  const exec = (command, args = []) => {
+    calls.push([command, ...args]);
+    if (command === 'whoami') return { status: 0, stdout: `"${WINDOWS_ACCOUNT}","${WINDOWS_SID}"\r\n`, stderr: '' };
+    if (command === 'icacls') {
+      const [target, ...rest] = args;
+      if (rest.length) {
+        const grant = rest.at(-1);
+        acl.set(target, `${WINDOWS_ACCOUNT}:${grant.slice(grant.indexOf(':') + 1)}`);
+        return { status: 0, stdout: `processed file: ${target}\r\n`, stderr: '' };
+      }
+      return { status: 0, stdout: `${target} ${acl.get(target) ?? `${WINDOWS_ACCOUNT}:(I)(F)`}\r\n`, stderr: '' };
+    }
+    throw new Error(`Unexpected command: ${command}`);
+  };
+  return { exec, calls };
 }
 
 test('hidden entry supports backspace without echo and restores terminal mode', async () => {
@@ -77,6 +100,23 @@ test('symlink files and directories cannot redirect credential writes', t => {
   const link = path.join(root, 'linked');
   fs.symlinkSync(path.dirname(file), link);
   assert.throws(() => saveCredentials(path.join(link, '.env'), NAME, 'fixture-key'), /cannot be a symlink/);
+});
+
+test('Windows credential writes restrict the directory and the file to the current SID', t => {
+  const root = fixture(t);
+  const file = path.join(root, 'credentials/.env');
+  const directory = path.dirname(file);
+  const { exec, calls } = windowsExec();
+  saveCredentials(file, NAME, 'fixture-windows', { platform: 'win32', exec });
+  assert.equal(readEnvKey(file, NAME), 'fixture-windows');
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  const icacls = calls.filter(([command]) => command === 'icacls');
+  const grants = icacls.filter(call => call.includes('/inheritance:r')).map(call => [call[1], call.at(-1)]);
+  assert.deepEqual(grants[0], [directory, `*${WINDOWS_SID}:(OI)(CI)F`]);
+  assert.equal(path.dirname(grants[1][0]), directory);
+  assert.match(path.basename(grants[1][0]), /^\.credentials-[\w-]+\.tmp$/);
+  assert.equal(grants[1][1], `*${WINDOWS_SID}:F`);
+  assert.ok(icacls.some(call => call.length === 2 && call[1] === grants[1][0]));
 });
 
 test('duplicate assignments and invalid secrets leave existing contents untouched', t => {

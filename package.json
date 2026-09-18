@@ -13,7 +13,9 @@
     "llm",
     "router",
     "cli",
-    "macos"
+    "macos",
+    "linux",
+    "windows"
   ],
   "type": "module",
   "bin": {
@@ -34,10 +36,12 @@
     "node": ">=22.15.0"
   },
   "os": [
-    "darwin"
+    "darwin",
+    "linux",
+    "win32"
   ],
   "scripts": {
-    "test": "node --test --test-concurrency=1 tests/*.test.js"
+    "test": "node --test --test-concurrency=1"
   },
   "dependencies": {
     "smol-toml": "1.8.0"

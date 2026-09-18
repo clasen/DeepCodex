@@ -1,9 +1,9 @@
-import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { emitKeypressEvents } from 'node:readline';
 import { loadConfig } from './worker.js';
+import { ensurePrivateDirectory, privateRead, privateWrite } from './private-files.js';
 
 export function readSecret(input = process.stdin, output = process.stderr) {
   if (!input.isTTY || !output.isTTY) throw new Error('Configure requires an interactive terminal; do not pass the key as an argument.');
@@ -44,28 +44,21 @@ export function readSecret(input = process.stdin, output = process.stderr) {
   });
 }
 
-export function saveCredentials(file, name, secret) {
+export function saveCredentials(file, name, secret, options = {}) {
   if (!/^[A-Z_][A-Z0-9_]*$/.test(name) || !/^[\x21-\x7e]+$/.test(secret)) {
     throw new Error('Invalid credential name or key.');
   }
   const directory = path.dirname(file);
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const directoryStat = fs.lstatSync(directory);
-  if (!directoryStat.isDirectory() || directoryStat.uid !== process.getuid()) {
-    throw new Error('Credentials directory must be owned by this user and cannot be a symlink.');
-  }
-  fs.chmodSync(directory, 0o700);
-  let existing = '';
-  let fd;
   try {
-    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
-    const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || stat.uid !== process.getuid()) throw new Error('Credentials must be a regular file owned by this user.');
-    existing = fs.readFileSync(fd, 'utf8');
+    ensurePrivateDirectory(directory, options);
   } catch (error) {
-    if (error.code !== 'ENOENT') throw new Error('Cannot safely open the credentials file.');
-  } finally {
-    if (fd !== undefined) fs.closeSync(fd);
+    throw new Error('Credentials directory must be owned by this user and cannot be a symlink.', { cause: error });
+  }
+  let existing;
+  try {
+    existing = privateRead(file, options) ?? '';
+  } catch (error) {
+    throw new Error('Cannot safely open the credentials file.', { cause: error });
   }
   const assignment = `${name}=${JSON.stringify(secret)}`;
   const lines = existing.split(/\r\n|\r|\n/);
@@ -77,12 +70,7 @@ export function saveCredentials(file, name, secret) {
     lines.push(assignment, '');
   }
   const temporary = path.join(directory, `.credentials-${randomUUID()}.tmp`);
-  try {
-    fs.writeFileSync(temporary, lines.join('\n'), { flag: 'wx', mode: 0o600 });
-    fs.renameSync(temporary, file);
-  } finally {
-    fs.rmSync(temporary, { force: true });
-  }
+  privateWrite(file, lines.join('\n'), { ...options, temporary, exclusive: true });
 }
 
 export async function main(args) {
