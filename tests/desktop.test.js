@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
-import { mergeConfig, privateWrite, plistDocument, copyRuntime } from '../scripts/desktop.js';
+import { mergeConfig, mergeAgentInstructions, privateWrite, plistDocument, copyRuntime } from '../scripts/desktop.js';
 import { parseToml } from '../scripts/toml.js';
 import { ROOT } from '../scripts/worker.js';
 
@@ -14,6 +14,30 @@ function temporary(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }
+
+test('global instructions preserve user content and reinstall without changing an existing block', () => {
+  for (const original of ['', '# My rules\nKeep changes narrow.\n', '# My rules\r\nNo trailing newline']) {
+    const installed = mergeAgentInstructions(original);
+    assert.match(installed, /deepcodex:delegate-flash/);
+    assert.ok(installed.endsWith(original));
+    assert.equal(mergeAgentInstructions(installed), installed);
+    const customized = installed.replace('Small or inseparable tasks', 'Simple tasks');
+    assert.equal(mergeAgentInstructions(customized), customized);
+    assert.equal(mergeAgentInstructions(customized, { remove: true }), original);
+    assert.equal(mergeAgentInstructions(original, { remove: true }), original);
+    const laterEdits = '# Added before\n' + installed + '\n# Added after';
+    assert.equal(mergeAgentInstructions(laterEdits, { remove: true }), '# Added before\n' + original + '\n# Added after');
+  }
+});
+
+test('incomplete, reversed or duplicate instruction markers fail without returning modified content', () => {
+  const start = '<!-- DEEPCODEX_START -->';
+  const end = '<!-- DEEPCODEX_END -->';
+  for (const text of [start, end, end + start, start + start + end, start + end + end]) {
+    assert.throws(() => mergeAgentInstructions(text), /Invalid DeepCodex instruction markers/);
+    assert.throws(() => mergeAgentInstructions(text, { remove: true }), /Invalid DeepCodex instruction markers/);
+  }
+});
 
 test('merging preserves unrelated settings, comments and is idempotent', () => {
   const original = '# User settings\nmodel="gpt-6-astra"\n[features]\nmemories=true\n[features.context_management]\nexperimental_mode=true\n[mcp_servers.example]\ncommand="example"\n';

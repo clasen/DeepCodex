@@ -95,7 +95,11 @@ result confirms local prerequisites, not provider authentication or account cred
   `~/.config/opencodex/desktop/config.before.toml`;
 - registers and installs the bundled DeepCodex plugin in the personal marketplace,
   including its current name, description, icon and delegation skill. An existing
-  local OpenCodex plugin in that marketplace is replaced after DeepCodex installs.
+  local OpenCodex plugin in that marketplace is replaced after DeepCodex installs;
+- adds a marked DeepCodex block to the global `AGENTS.md` in `CODEX_HOME`
+  (default `~/.codex`) when that block is absent. It asks Codex to consider
+  delegation for suitable independent subtasks. Reinstallation preserves the
+  existing block and all other instructions; uninstall removes only that block.
 
 The installer refuses to run when an unrelated custom provider is active or when
 an endpoint override is already configured, and it leaves your configuration

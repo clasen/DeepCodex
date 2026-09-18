@@ -15,6 +15,36 @@ const LSREGISTER = '/System/Library/Frameworks/CoreServices.framework/Frameworks
 const readJson = filename => JSON.parse(fs.readFileSync(filename, 'utf8'));
 const expandHome = filename => filename.startsWith('~/') ? path.join(os.homedir(), filename.slice(2)) : filename;
 
+export function mergeAgentInstructions(text, { remove = false } = {}) {
+  const start = '<!-- DEEPCODEX_START -->';
+  const end = '<!-- DEEPCODEX_END -->';
+  const first = text.indexOf(start);
+  const last = text.indexOf(end);
+  if (first === -1 && last === -1) {
+    if (remove) return text;
+    return `${start}\n## DeepCodex\n\n` +
+      'Always consider DeepCodex when planning a task. When independent, verifiable\n' +
+      'subtasks justify delegation, use the `deepcodex:delegate-flash` skill and\n' +
+      'prefer DeepSeek Flash for execution. Keep the user-selected main model as\n' +
+      'coordinator, responsible for reviewing and integrating the results.\n' +
+      'Small or inseparable tasks do not require delegation.\n' +
+      `${end}\n\n${text}`;
+  }
+  if (first === -1 || last < first || text.indexOf(start, first + start.length) !== -1 || text.indexOf(end, last + end.length) !== -1) {
+    throw new Error('Invalid DeepCodex instruction markers in global AGENTS.md; repair the managed block before retrying');
+  }
+  if (!remove) return text;
+  const after = last + end.length;
+  return text.slice(0, first) + text.slice(after).replace(/^\r?\n(?:\r?\n)?/, '');
+}
+
+function updateAgentInstructions(configPath, options) {
+  const filename = path.join(path.dirname(configPath), 'AGENTS.md');
+  const before = fs.existsSync(filename) ? fs.readFileSync(filename, 'utf8') : '';
+  const updated = mergeAgentInstructions(before, options);
+  if (updated !== before) privateWrite(filename, updated);
+}
+
 export function privateWrite(filename, content) {
   const temporary = filename + '.tmp';
   const fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW, 0o600);
@@ -180,6 +210,8 @@ export async function install() {
   if (pluginSupport.error || pluginSupport.status !== 0) throw new Error('Codex CLI must support plugin add; update Codex Desktop before installing DeepCodex');
   const configPath = path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'config.toml');
   const before = fs.readFileSync(configPath, 'utf8');
+  const instructionsPath = path.join(path.dirname(configPath), 'AGENTS.md');
+  mergeAgentInstructions(fs.existsSync(instructionsPath) ? fs.readFileSync(instructionsPath, 'utf8') : '');
   const parsed = parseToml(before);
   if (!['openai', 'opencodex'].includes(parsed.model_provider ?? 'openai')) throw new Error('An unrelated custom provider is active; refusing to replace it');
   if (parsed.openai_base_url || parsed.chatgpt_base_url) throw new Error('An existing endpoint override needs an explicit integration plan');
@@ -247,18 +279,29 @@ export async function install() {
     }
   }
   if (fs.readFileSync(configPath, 'utf8') !== before) throw new Error('Codex config changed during installation; proposed config was not applied');
-  let plugin;
   try {
-    plugin = installPlugin(ROOT, diagnosis.codex, env);
+    installPlugin(ROOT, diagnosis.codex, env);
     updated = mergeConfig(fs.readFileSync(configPath, 'utf8'), sections);
     privateWrite(path.join(STATE, 'config.proposed.toml'), updated);
+    updateAgentInstructions(configPath);
   } catch (error) {
     spawnSync('launchctl', ['bootout', `${domain}/${label}`]);
     throw error;
   }
   privateWrite(configPath, updated);
-  console.log(JSON.stringify({ ...report, service: label, port: config.port, cwd: runtime, owner: 'DeepCodex LaunchAgent',
-    native_models: nativeModels.length, subagent_model: child.slug, plugin, backup: path.join(STATE, 'config.before.toml'), restart_desktop_required: true }));
+  console.log([
+    '',
+    `  ${process.stdout.isTTY && !('NO_COLOR' in process.env) ? '\x1b[32m✓\x1b[0m' : '✓'} DeepCodex installed successfully`,
+    '',
+    '  The local service is running and the Codex plugin is installed.',
+    '  DeepSeek Flash is configured for delegated tasks.',
+    '  Global instructions are in place to consider DeepCodex when planning tasks.',
+    '',
+    '  Next: fully quit and reopen Codex Desktop, then start a new task.',
+    '',
+    '  Check the service anytime with: deepcodex status',
+    '',
+  ].join('\n'));
 }
 
 export function uninstall() {
@@ -276,6 +319,8 @@ export function uninstall() {
   if (current !== proposed && current !== before) {
     throw new Error('Codex configuration changed after installation; uninstall stopped without changes. Reconcile config.toml with the backup and proposed config in ' + STATE);
   }
+  const instructionsPath = path.join(path.dirname(configPath), 'AGENTS.md');
+  mergeAgentInstructions(fs.existsSync(instructionsPath) ? fs.readFileSync(instructionsPath, 'utf8') : '', { remove: true });
   const runtime = path.join(os.homedir(), '.local/share/opencodex/runtime');
   if (state.runtime !== runtime) throw new Error('Unexpected router runtime path; uninstall stopped');
   const label = readJson(path.join(ROOT, 'config/desktop.json')).service_label;
@@ -287,6 +332,7 @@ export function uninstall() {
   if (stopped.error || (stopped.status !== 0 && stopped.status !== 3)) {
     throw new Error('Cannot stop DeepCodex LaunchAgent; Codex settings restored, runtime retained. Retry uninstall.');
   }
+  updateAgentInstructions(configPath, { remove: true });
   fs.rmSync(path.join(os.homedir(), 'Library/LaunchAgents', label + '.plist'), { force: true });
   const app = path.join(runtime, 'DeepCodex.app');
   if (fs.existsSync(app)) registerServiceApp(app, '-u');
