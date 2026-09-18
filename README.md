@@ -1,11 +1,34 @@
 # DeepCodex
 
-DeepCodex keeps the coordinator on your selected native Codex model and runs
-DeepSeek Flash as an actual Codex subagent through a local loopback router. The
-subagent appears in the normal collaboration tools (`spawn_agent`,
-`followup_task`, `wait_agent`, `interrupt_agent`) under the model name
-`deepseek-flash`. Nothing is disguised under an OpenAI model name, and the
-native coordinator model is not replaced.
+DeepCodex lets you keep Astra, or your preferred native Codex model, in charge
+of a task while delegating bounded work to DeepSeek Flash. The coordinator
+decides what to delegate and reviews the results before integrating them.
+
+[OpenDesign Arena](https://open-design.ai/llm-arena-for-design/) compared 13 models
+on design tasks. Eleven scored lower than DeepSeek V4.1 Flash and cost more.
+Only GPT-6 Astra scored higher overall:
+
+| Model | Average score / 100 | Estimated cost per artifact |
+| --- | --- | --- |
+| DeepSeek V4.1 Flash | 81.2 | $0.023 |
+| GPT-6 Astra | 82.7 | $1.61 |
+
+Astra's estimated cost was 70 times Flash's for a 1.5-point gain in that design
+evaluation. DeepCodex lets you choose a model per job: keep the coordinator's
+judgment for work that needs it, and give Flash tasks with a clear scope and a
+result you can check.
+
+For example, the coordinator can work through a change that spans several
+modules while Flash adds regression tests for an agreed behavior in a separate
+file. Small tasks that cannot be split usefully can stay with the coordinator.
+
+Flash runs as an actual Codex subagent through a local loopback router. It
+appears as `deepseek-flash` in the normal collaboration tools (`spawn_agent`,
+`followup_task`, `wait_agent`, `interrupt_agent`), alongside your selected native
+coordinator model. Delegation consumes DeepSeek API usage and Codex quota;
+encrypted task handoffs also require a native relay call. Actual savings depend
+on the delegated work and the coordinator's usage. See
+[Encrypted handoff relay](#encrypted-handoff-relay) for how that works.
 
 ## Requirements
 
