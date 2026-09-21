@@ -163,8 +163,9 @@ result confirms local prerequisites, not provider authentication or account cred
   `~/.config/deepcodex/desktop`;
 - installs and starts `com.deepcodex.router`, bound only to `127.0.0.1:4207`: a
   LaunchAgent on macOS, a systemd user service on Linux, or a scheduled task on
-  Windows. The Windows task uses a hidden PowerShell supervisor to run Node
-  without a console window. The service starts with the user session; Windows
+  Windows. The Windows installer builds a supervisor with the Windows GUI
+  subsystem so neither the supervisor nor Node creates a console window.
+  The service starts with the user session; Windows
   requires that user to be logged in;
 - updates `~/.codex/config.toml` with the local provider, the subagent defaults
   and the generated model catalog, keeping a pre-install backup at

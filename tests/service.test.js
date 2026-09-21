@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
-import { systemdUnit, windowsServiceScript, userService } from '../scripts/service.js';
+import { systemdUnit, windowsLauncherScript, windowsServiceScript, userService } from '../scripts/service.js';
 
 const config = {
   service_label: 'com.deepcodex.router', service_throttle_seconds: 10,
@@ -52,20 +52,14 @@ test('Linux fails immediately when the user service manager is unavailable', t =
   assert.equal(calls.length, 1);
 });
 
-function windowsLauncher(script) {
-  const argument = script.match(/-Argument '(-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ([A-Za-z0-9+/=]+))'/);
-  assert.ok(argument, 'the scheduled task must launch a hidden PowerShell supervisor');
-  return { args: argument[1].split(' '), source: Buffer.from(argument[2], 'base64').toString('utf16le') };
-}
-
-test('Windows registers a hidden supervised logon task with literal paths', () => {
+test('Windows registers a console-free supervised logon task with literal paths', () => {
   const state = { node: 'C:\\Program Files\\node.exe', runtime: "C:\\Users\\O'Brien $x\\runtime", config };
   const env = { SystemRoot: 'C:\\Windows', PATH: 'C:\\some & dir' };
   const script = windowsServiceScript('install', state);
-  const launcher = windowsLauncher(script).source;
-  assert.match(launcher, /\$start.UseShellExecute = \$false/);
-  assert.match(launcher, /\$start.CreateNoWindow = \$true/);
-  assert.match(launcher, /\$child.WaitForExit\(\)\s+exit \$child.ExitCode/);
+  assert.match(script, /-OutputType WindowsApplication/);
+  assert.match(script, /UseShellExecute = false/);
+  assert.match(script, /CreateNoWindow = true/);
+  assert.match(script, /child.WaitForExit\(\);\s+return child.ExitCode;/);
   assert.match(script, /-LogonType Interactive -RunLevel Limited/);
   const taskIdentity = script.split('\n')[1];
   assert.match(taskIdentity, /WindowsIdentity.*User.Value/);
@@ -75,10 +69,13 @@ test('Windows registers a hidden supervised logon task with literal paths', () =
   assert.match(script, /New-ScheduledTaskTrigger -AtLogOn -User \$user/);
   assert.match(script, /ExecutionTimeLimit \(\[TimeSpan\]::Zero\)/);
   assert.ok(script.indexOf('Stop-ScheduledTask') < script.indexOf('Register-ScheduledTask'));
-  assert.ok(script.includes("New-ScheduledTaskAction -Execute (Join-Path $PSHOME 'powershell.exe')"));
-  assert.ok(launcher.includes("$start.FileName = 'C:\\Program Files\\node.exe'"));
-  assert.ok(launcher.includes(`$start.Arguments = '"C:\\Users\\O''Brien $x\\runtime\\scripts\\desktop.js" serve'`));
-  assert.ok(launcher.includes("$start.WorkingDirectory = 'C:\\Users\\O''Brien $x\\runtime'"));
+  assert.ok(script.indexOf('Stop-ScheduledTask') < script.indexOf('Remove-Item -LiteralPath $launcher'));
+  assert.ok(script.indexOf('Add-Type') < script.indexOf('Register-ScheduledTask'));
+  assert.ok(script.includes("$launcher = 'C:\\Users\\O''Brien $x\\runtime\\DeepCodex.Service.exe'"));
+  assert.ok(script.includes('New-ScheduledTaskAction -Execute $launcher'));
+  assert.ok(script.includes(`-Argument '"C:\\Program Files\\node.exe" "C:\\Users\\O''Brien $x\\runtime\\scripts\\desktop.js"'`));
+  assert.ok(script.includes("-WorkingDirectory 'C:\\Users\\O''Brien $x\\runtime'"));
+  assert.doesNotMatch(script, /WindowStyle|powershell\.exe/);
   assert.doesNotMatch(script, /cmd.exe|& 'C:/);
   const calls = [];
   userService('install', state, env, { platform: 'win32', spawn: (command, args) => { calls.push([command, args]); return { status: 0 }; } });
@@ -88,7 +85,7 @@ test('Windows registers a hidden supervised logon task with literal paths', () =
   assert.doesNotMatch(windowsServiceScript('stop', state), /Unregister-ScheduledTask/);
 });
 
-test('Windows supervisor waits for Node and propagates its exit code', { skip: process.platform !== 'win32' }, t => {
+test('Windows builds a GUI supervisor that waits for Node and propagates its exit code', { skip: process.platform !== 'win32' }, t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-service-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const runtime = path.join(root, "O'Brien & $x 日本語");
@@ -100,19 +97,26 @@ test('Windows supervisor waits for Node and propagates its exit code', { skip: p
     }, 100);
   `);
   const state = { node: process.execPath, runtime, config };
-  const { args } = windowsLauncher(windowsServiceScript('install', state));
   const powershell = path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');
-  const result = spawnSync(powershell, args, { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+  const buildScript = "$ErrorActionPreference = 'Stop'\n" + windowsLauncherScript(state);
+  const build = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand',
+    Buffer.from(buildScript, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+  assert.equal(build.error, undefined);
+  assert.equal(build.status, 0, build.stderr);
+  const launcher = path.join(runtime, 'DeepCodex.Service.exe');
+  const binary = fs.readFileSync(launcher);
+  const peHeader = binary.readUInt32LE(0x3c);
+  assert.equal(binary.readUInt16LE(peHeader + 4 + 20 + 68), 2, 'the PE subsystem must be Windows GUI, not console');
+  const result = spawnSync(launcher, [state.node, path.join(runtime, 'scripts/desktop.js')], { encoding: 'utf8', timeout: 15000 });
   assert.equal(result.error, undefined);
   assert.equal(result.status, 42, result.stderr);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runtime, 'result.json'), 'utf8')), { args: ['serve'], cwd: runtime });
-  const failed = windowsLauncher(windowsServiceScript('install', { ...state, node: path.join(root, 'missing.exe') }));
-  const failure = spawnSync(powershell, failed.args, { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+  const failure = spawnSync(launcher, [path.join(root, 'missing.exe'), path.join(runtime, 'scripts/desktop.js')], { encoding: 'utf8', timeout: 15000 });
   assert.equal(failure.error, undefined);
   assert.equal(failure.status, 1, failure.stderr);
 });
 
-test('Windows scheduled task stop terminates the supervised Node process', { skip: process.platform !== 'win32' }, async t => {
+test('Windows scheduled task reinstall and stop terminate the supervised Node process', { skip: process.platform !== 'win32' }, async t => {
   const runtime = fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-task-'));
   const state = { node: process.execPath, runtime, config: {
     ...config, service_label: `deepcodex-test-${process.pid}-${Date.now()}`, service_throttle_seconds: 1,
@@ -145,10 +149,19 @@ test('Windows scheduled task stop terminates the supervised Node process', { ski
   assert.ok(fs.existsSync(pidFile), 'the scheduled task must start Node');
   const pid = Number(fs.readFileSync(pidFile, 'utf8'));
   assert.ok(alive(pid));
+  fs.unlinkSync(pidFile);
+  userService('install', state);
+  const restartedBy = Date.now() + 15000;
+  while (!fs.existsSync(pidFile) && Date.now() < restartedBy) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.ok(fs.existsSync(pidFile), 'reinstall must rebuild the launcher and start Node');
+  const restartedPid = Number(fs.readFileSync(pidFile, 'utf8'));
+  assert.notEqual(restartedPid, pid);
+  assert.equal(alive(pid), false, 'reinstall must terminate the previous Node process');
+  assert.ok(alive(restartedPid));
   userService('stop', state);
   const stoppedBy = Date.now() + 5000;
-  while (alive(pid) && Date.now() < stoppedBy) await new Promise(resolve => setTimeout(resolve, 50));
-  assert.equal(alive(pid), false, 'stopping the task must also terminate Node');
+  while (alive(restartedPid) && Date.now() < stoppedBy) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(alive(restartedPid), false, 'stopping the task must also terminate Node');
 });
 
 test('Windows propagates service failures and requires SystemRoot', () => {

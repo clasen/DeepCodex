@@ -23,6 +23,36 @@ export function systemdUnit(state, env) {
     `Restart=always\nRestartSec=${state.config.service_throttle_seconds}\nUMask=0077\n\n[Install]\nWantedBy=default.target\n`;
 }
 
+export function windowsLauncherScript(state) {
+  const source = `using System;
+using System.Diagnostics;
+using System.IO;
+
+public static class DeepCodexService {
+  public static int Main(string[] args) {
+    if (args.Length != 2) return 1;
+    try {
+      var start = new ProcessStartInfo {
+        FileName = args[0],
+        Arguments = '"' + args[1] + '"' + " serve",
+        WorkingDirectory = Path.GetDirectoryName(Path.GetDirectoryName(args[1])),
+        UseShellExecute = false,
+        CreateNoWindow = true
+      };
+      using (var child = Process.Start(start)) {
+        child.WaitForExit();
+        return child.ExitCode;
+      }
+    } catch (Exception) {
+      return 1;
+    }
+  }
+}`;
+  return `$launcher = ${literal(path.win32.join(state.runtime, 'DeepCodex.Service.exe'))}\n` +
+    'if (Test-Path -LiteralPath $launcher) { Remove-Item -LiteralPath $launcher }\n' +
+    `Add-Type -TypeDefinition ${literal(source)} -Language CSharp -OutputAssembly $launcher -OutputType WindowsApplication\n`;
+}
+
 export function windowsServiceScript(action, state) {
   const name = '$name';
   const header = '$ErrorActionPreference = \'Stop\'\n' +
@@ -36,20 +66,10 @@ export function windowsServiceScript(action, state) {
   if (action === 'remove') return header + stop +
     `if ($task) { Unregister-ScheduledTask -TaskName ${name} -Confirm:$false }\n`;
   if (action !== 'install') throw new Error('Unknown service action');
-  const argumentsText = `"${path.win32.join(state.runtime, 'scripts', 'desktop.js')}" serve`;
-  const launcher = "$ErrorActionPreference = 'Stop'\n" +
-    '$start = New-Object System.Diagnostics.ProcessStartInfo\n' +
-    `$start.FileName = ${literal(state.node)}\n` +
-    `$start.Arguments = ${literal(argumentsText)}\n` +
-    `$start.WorkingDirectory = ${literal(state.runtime)}\n` +
-    '$start.UseShellExecute = $false\n$start.CreateNoWindow = $true\n' +
-    '$child = [System.Diagnostics.Process]::Start($start)\n' +
-    '$child.WaitForExit()\nexit $child.ExitCode\n';
-  const launcherArguments = '-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ' +
-    Buffer.from(launcher, 'utf16le').toString('base64');
-  return header + stop +
+  const launcherArguments = `"${state.node}" "${path.win32.join(state.runtime, 'scripts', 'desktop.js')}"`;
+  return header + stop + windowsLauncherScript(state) +
     `$user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name\n` +
-    `$action = New-ScheduledTaskAction -Execute (Join-Path $PSHOME 'powershell.exe') -Argument ${literal(launcherArguments)} -WorkingDirectory ${literal(state.runtime)}\n` +
+    `$action = New-ScheduledTaskAction -Execute $launcher -Argument ${literal(launcherArguments)} -WorkingDirectory ${literal(state.runtime)}\n` +
     `$trigger = New-ScheduledTaskTrigger -AtLogOn -User $user\n` +
     `$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited\n` +
     `$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount ${state.config.windows_restart_count} -RestartInterval (New-TimeSpan -Seconds ${state.config.windows_restart_seconds})\n` +
