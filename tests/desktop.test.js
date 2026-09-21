@@ -15,19 +15,30 @@ function temporary(t) {
   return root;
 }
 
-test('global instructions preserve user content and reinstall without changing an existing block', () => {
+test('global instructions refresh the managed block on reinstall and preserve user content', () => {
   for (const original of ['', '# My rules\nKeep changes narrow.\n', '# My rules\r\nNo trailing newline']) {
     const installed = mergeAgentInstructions(original);
     assert.equal(installed, '<!-- DEEPCODEX_START -->\nAlways consider DeepCodex when planning a task. You are the orchestrator.\n<!-- DEEPCODEX_END -->\n\n' + original);
     assert.ok(installed.endsWith(original));
     assert.equal(mergeAgentInstructions(installed), installed);
     const customized = installed.replace('You are the orchestrator.', 'Coordinate and review the results.');
-    assert.equal(mergeAgentInstructions(customized), customized);
+    assert.equal(mergeAgentInstructions(customized), installed);
     assert.equal(mergeAgentInstructions(customized, { remove: true }), original);
     assert.equal(mergeAgentInstructions(original, { remove: true }), original);
     const laterEdits = '# Added before\n' + installed + '\n# Added after';
+    assert.equal(mergeAgentInstructions('# Added before\n' + customized + '\n# Added after'), laterEdits);
     assert.equal(mergeAgentInstructions(laterEdits, { remove: true }), '# Added before\n' + original + '\n# Added after');
   }
+});
+
+test('updating an old instruction block preserves surrounding CRLF text and its position', () => {
+  const before = '# User instructions\r\nKeep this.\r\n\r\n';
+  const after = '\r\n\r\n# More instructions\r\nNo trailing newline';
+  const old = '<!-- DEEPCODEX_START -->\r\n## DeepCodex\r\nOld delegation instructions.\r\n<!-- DEEPCODEX_END -->';
+  const current = mergeAgentInstructions('').trimEnd();
+  const updated = mergeAgentInstructions(before + old + after);
+  assert.equal(updated, before + current + after);
+  assert.equal(mergeAgentInstructions(updated), updated);
 });
 
 test('incomplete, reversed or duplicate instruction markers fail without returning modified content', () => {

@@ -257,7 +257,7 @@ function removeInstallation(fixture) {
   });
 }
 
-macTest('global instructions respect CODEX_HOME, preserve edits on reinstall, and remove only the managed block', t => {
+macTest('global instructions respect CODEX_HOME, refresh the managed block on reinstall, and preserve outside edits', t => {
   const original = '# My rules\nPreserve my settings.';
   const installed = fixture(t, true, { instructions: original, customCodexHome: true });
   assert.equal(installed.result.status, 0, installed.result.stderr);
@@ -270,7 +270,7 @@ macTest('global instructions respect CODEX_HOME, preserve edits on reinstall, an
   fs.writeFileSync(filename, customized);
   const repeated = installed.run();
   assert.equal(repeated.status, 0, repeated.stderr);
-  assert.equal(fs.readFileSync(filename, 'utf8'), customized);
+  assert.equal(fs.readFileSync(filename, 'utf8'), instructions + '\n# Later user edit\n');
   const removed = removeInstallation(installed);
   assert.equal(removed.status, 0, removed.stderr);
   assert.equal(fs.readFileSync(filename, 'utf8'), original + '\n# Later user edit\n');

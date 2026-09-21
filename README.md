@@ -174,8 +174,9 @@ result confirms local prerequisites, not provider authentication or account cred
   including its current name, description, icon and delegation skill;
 - adds a marked DeepCodex block to the global `AGENTS.md` in `CODEX_HOME`
   (default `~/.codex`) when that block is absent. It asks Codex to consider
-  delegation for suitable independent subtasks. Reinstallation preserves the
-  existing block and all other instructions; uninstall removes only that block.
+  delegation for suitable independent subtasks. Reinstallation replaces the
+  managed block with the current instructions and preserves all text outside
+  its markers; uninstall removes only that block.
 
 The installer refuses to run when an unrelated custom provider is active or when
 an endpoint override is already configured, and it leaves your configuration

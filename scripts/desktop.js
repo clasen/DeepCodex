@@ -22,19 +22,20 @@ const expandHome = filename => filename.startsWith('~/') ? path.join(os.homedir(
 export function mergeAgentInstructions(text, { remove = false } = {}) {
   const start = '<!-- DEEPCODEX_START -->';
   const end = '<!-- DEEPCODEX_END -->';
+  const block = `${start}\n` +
+    'Always consider DeepCodex when planning a task. You are the orchestrator.\n' +
+    end;
   const first = text.indexOf(start);
   const last = text.indexOf(end);
   if (first === -1 && last === -1) {
     if (remove) return text;
-    return `${start}\n` +
-      'Always consider DeepCodex when planning a task. You are the orchestrator.\n' +
-      `${end}\n\n${text}`;
+    return `${block}\n\n${text}`;
   }
   if (first === -1 || last < first || text.indexOf(start, first + start.length) !== -1 || text.indexOf(end, last + end.length) !== -1) {
     throw new Error('Invalid DeepCodex instruction markers in global AGENTS.md; repair the managed block before retrying');
   }
-  if (!remove) return text;
   const after = last + end.length;
+  if (!remove) return text.slice(0, first) + block + text.slice(after);
   return text.slice(0, first) + text.slice(after).replace(/^\r?\n(?:\r?\n)?/, '');
 }
 
