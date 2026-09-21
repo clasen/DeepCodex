@@ -26,12 +26,8 @@ export function mergeAgentInstructions(text, { remove = false } = {}) {
   const last = text.indexOf(end);
   if (first === -1 && last === -1) {
     if (remove) return text;
-    return `${start}\n## DeepCodex\n\n` +
-      'Always consider DeepCodex when planning a task. When independent, verifiable\n' +
-      'subtasks justify delegation, use the `deepcodex:delegate-flash` skill and\n' +
-      'prefer DeepSeek Flash for execution. Keep the user-selected main model as\n' +
-      'coordinator, responsible for reviewing and integrating the results.\n' +
-      'Small or inseparable tasks do not require delegation.\n' +
+    return `${start}\n` +
+      'Always consider DeepCodex when planning a task. You are the orchestrator.\n' +
       `${end}\n\n${text}`;
   }
   if (first === -1 || last < first || text.indexOf(start, first + start.length) !== -1 || text.indexOf(end, last + end.length) !== -1) {

@@ -37,9 +37,19 @@ export function windowsServiceScript(action, state) {
     `if ($task) { Unregister-ScheduledTask -TaskName ${name} -Confirm:$false }\n`;
   if (action !== 'install') throw new Error('Unknown service action');
   const argumentsText = `"${path.win32.join(state.runtime, 'scripts', 'desktop.js')}" serve`;
+  const launcher = "$ErrorActionPreference = 'Stop'\n" +
+    '$start = New-Object System.Diagnostics.ProcessStartInfo\n' +
+    `$start.FileName = ${literal(state.node)}\n` +
+    `$start.Arguments = ${literal(argumentsText)}\n` +
+    `$start.WorkingDirectory = ${literal(state.runtime)}\n` +
+    '$start.UseShellExecute = $false\n$start.CreateNoWindow = $true\n' +
+    '$child = [System.Diagnostics.Process]::Start($start)\n' +
+    '$child.WaitForExit()\nexit $child.ExitCode\n';
+  const launcherArguments = '-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ' +
+    Buffer.from(launcher, 'utf16le').toString('base64');
   return header + stop +
     `$user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name\n` +
-    `$action = New-ScheduledTaskAction -Execute ${literal(state.node)} -Argument ${literal(argumentsText)} -WorkingDirectory ${literal(state.runtime)}\n` +
+    `$action = New-ScheduledTaskAction -Execute (Join-Path $PSHOME 'powershell.exe') -Argument ${literal(launcherArguments)} -WorkingDirectory ${literal(state.runtime)}\n` +
     `$trigger = New-ScheduledTaskTrigger -AtLogOn -User $user\n` +
     `$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited\n` +
     `$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount ${state.config.windows_restart_count} -RestartInterval (New-TimeSpan -Seconds ${state.config.windows_restart_seconds})\n` +

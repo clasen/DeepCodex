@@ -18,10 +18,10 @@ function temporary(t) {
 test('global instructions preserve user content and reinstall without changing an existing block', () => {
   for (const original of ['', '# My rules\nKeep changes narrow.\n', '# My rules\r\nNo trailing newline']) {
     const installed = mergeAgentInstructions(original);
-    assert.match(installed, /deepcodex:delegate-flash/);
+    assert.equal(installed, '<!-- DEEPCODEX_START -->\nAlways consider DeepCodex when planning a task. You are the orchestrator.\n<!-- DEEPCODEX_END -->\n\n' + original);
     assert.ok(installed.endsWith(original));
     assert.equal(mergeAgentInstructions(installed), installed);
-    const customized = installed.replace('Small or inseparable tasks', 'Simple tasks');
+    const customized = installed.replace('You are the orchestrator.', 'Coordinate and review the results.');
     assert.equal(mergeAgentInstructions(customized), customized);
     assert.equal(mergeAgentInstructions(customized, { remove: true }), original);
     assert.equal(mergeAgentInstructions(original, { remove: true }), original);

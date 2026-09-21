@@ -1,6 +1,6 @@
 {
   "name": "deepcodex",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Delegates tasks to native DeepSeek Flash subagents inside Codex through a local router.",
   "author": {
     "name": "DeepCodex"

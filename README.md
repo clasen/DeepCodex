@@ -163,8 +163,9 @@ result confirms local prerequisites, not provider authentication or account cred
   `~/.config/deepcodex/desktop`;
 - installs and starts `com.deepcodex.router`, bound only to `127.0.0.1:4207`: a
   LaunchAgent on macOS, a systemd user service on Linux, or a scheduled task on
-  Windows. The service starts with the user session; Windows requires that user
-  to be logged in;
+  Windows. The Windows task uses a hidden PowerShell supervisor to run Node
+  without a console window. The service starts with the user session; Windows
+  requires that user to be logged in;
 - updates `~/.codex/config.toml` with the local provider, the subagent defaults
   and the generated model catalog, keeping a pre-install backup at
   `~/.config/deepcodex/desktop/config.before.toml`;
@@ -269,7 +270,8 @@ Codex transport test is skipped unless `DEEPCODEX_TEST_CODEX` points at a real
 `codex` binary; when it is set, that test launches the real CLI against a local
 fixture server. Treat it as an optional, deliberate opt-in rather than part of a
 routine run. Windows command definitions and ACL handling have mocked tests; the
-`.cmd` argument round trip runs only on Windows. Integration fixtures that require
+`.cmd` argument round trip, service supervisor and scheduled task stop tests run
+only on Windows. Integration fixtures that require
 POSIX shell scripts and process groups are skipped on Windows.
 
 ## Security notes
