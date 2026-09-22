@@ -17,16 +17,16 @@ function temporary(t) {
 
 test('global instructions refresh the managed block on reinstall and preserve user content', () => {
   const block = '<!-- DEEPCODEX_START -->\n## DeepCodex\n\n' +
-    'Keep the orchestrator on the user\'s selected model.\n' +
-    'Prefer DeepSeek Flash for bounded execution tasks through\n' +
-    'the `deepcodex:delegate-flash` skill.\n' +
+    'Before making code changes, read the `deepcodex:delegate-flash` skill\n' +
+    'to assess delegation, preferring DeepSeek Flash for bounded execution tasks\n' +
+    'while keeping the orchestrator on the user\'s selected model.\n' +
     '<!-- DEEPCODEX_END -->';
   for (const original of ['', '# My rules\nKeep changes narrow.\n', '# My rules\r\nNo trailing newline']) {
     const installed = mergeAgentInstructions(original);
     assert.equal(installed, block + '\n\n' + original);
     assert.ok(installed.endsWith(original));
     assert.equal(mergeAgentInstructions(installed), installed);
-    const customized = installed.replace('Keep the orchestrator on the user\'s selected model.', 'Coordinate and review the results.');
+    const customized = installed.replace('Before making code changes', 'Before starting work');
     assert.equal(mergeAgentInstructions(customized), installed);
     assert.equal(mergeAgentInstructions(customized, { remove: true }), original);
     assert.equal(mergeAgentInstructions(original, { remove: true }), original);

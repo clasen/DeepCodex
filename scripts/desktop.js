@@ -25,9 +25,9 @@ export function mergeAgentInstructions(text, { remove = false } = {}) {
   const block = `${start}\n` +
     '## DeepCodex\n' +
     '\n' +
-    'Keep the orchestrator on the user\'s selected model.\n' +
-    'Prefer DeepSeek Flash for bounded execution tasks through\n' +
-    'the `deepcodex:delegate-flash` skill.\n' +
+    'Before making code changes, read the `deepcodex:delegate-flash` skill\n' +
+    'to assess delegation, preferring DeepSeek Flash for bounded execution tasks\n' +
+    'while keeping the orchestrator on the user\'s selected model.\n' +
     end;
   const first = text.indexOf(start);
   const last = text.indexOf(end);
