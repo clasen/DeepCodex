@@ -223,6 +223,7 @@ export function buildCommand(binary, config, cwd, write, runDir) {
 
 export function parseResult(stdout, stderr, finalText, returncode, stopReason, config) {
   let completed = false;
+  let failed = false;
   const errors = [];
   let usage = null;
   let threadId = null;
@@ -242,7 +243,9 @@ export function parseResult(stdout, stderr, finalText, returncode, stopReason, c
     } else if (event.type === 'turn.completed') {
       completed = true;
       usage = event.usage ?? null;
+      if (!failed) errors.length = 0;
     } else if (event.type === 'turn.failed' || event.type === 'error') {
+      if (event.type === 'turn.failed') failed = true;
       errors.push(pick(event, 'error', pick(event, 'message', 'Worker error')));
     }
   }

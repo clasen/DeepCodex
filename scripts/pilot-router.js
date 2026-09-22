@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { once } from 'node:events';
 import { pathToFileURL } from 'node:url';
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { appendFileSync, existsSync, renameSync, statSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import { zstdDecompressSync } from 'node:zlib';
@@ -25,6 +25,25 @@ export function nativeHeaders(headers) {
   const result = { 'content-type': 'application/json', accept: 'text/event-stream' };
   for (const key of nativeHeaderNames) if (headers[key]) result[key] = headers[key];
   return result;
+}
+
+// Receipt telemetry is an allowlist: only these transport codes may leave the process, so an
+// upstream message, header or object can never reach the receipts file through error metadata.
+const safeErrorCodes = new Set([
+  'ABORT_ERR', 'EAI_AGAIN', 'ECONNABORTED', 'ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH',
+  'ENOTFOUND', 'EPIPE', 'ETIMEDOUT', 'ERR_NAMESPACE_RELAY_COMMITTED_STREAM', 'UND_ERR_ABORTED',
+  'UND_ERR_BODY_TIMEOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_DESTROYED', 'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_SOCKET', 'Z_BUF_ERROR', 'Z_DATA_ERROR', 'Z_STREAM_ERROR',
+]);
+
+export function safeErrorCode(error) {
+  for (const value of [error?.cause?.cause?.code, error?.cause?.code, error?.code]) {
+    if (typeof value === 'string' && safeErrorCodes.has(value)) return value;
+  }
+  for (const name of [error?.cause?.cause?.name, error?.cause?.name, error?.name]) {
+    if (name === 'AbortError') return 'ABORT_ERR';
+  }
+  return 'unknown';
 }
 
 export function sseEvents(text) {
@@ -92,7 +111,7 @@ export async function startPilot(config, deepseekKey, capability) {
     if (++requestCount > config.max_requests && config.max_requests !== null) throw new Error('Pilot request limit exceeded');
     return fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal, redirect: 'error' });
   }
-  async function handoff(item, headers, signal) {
+  async function handoff(item, headers, signal, telemetry) {
     const token = item.content.find(part => part.type === 'encrypted_content')?.encrypted_content;
     if (!token || !encryptedToken.test(token)) return plaintextHandoffs([item])[0];
     const cacheKey = createHash('sha256').update(headers.authorization).update(token).digest('hex');
@@ -108,7 +127,7 @@ export async function startPilot(config, deepseekKey, capability) {
         tool_choice: { type: 'function', name: 'relay_external_agent_payload' },
       }, signal);
       const body = await boundedText(result);
-      receipt({ route: 'relay', model: config.relay_model, http_status: result.status });
+      receipt({ route: 'relay', model: config.relay_model, http_status: result.status, ...telemetry() });
       if (!result.ok) throw new Error(`Native relay HTTP ${result.status}`);
       const events = sseEvents(body);
       if (!events.some(event => event.type === 'response.completed')) throw new Error('Native relay did not complete');
@@ -123,11 +142,20 @@ export async function startPilot(config, deepseekKey, capability) {
       ? { type: 'input_text', text: relayCache.get(cacheKey).text } : part) };
   }
   const server = http.createServer(async (request, response) => {
+    const startedAt = Date.now();
+    const requestId = randomUUID();
+    const telemetry = () => ({ timestamp: new Date().toISOString(), request_id: requestId,
+      duration_ms: Date.now() - startedAt });
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), config.request_timeout_ms);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, config.request_timeout_ms);
     let clientCancelled = false;
+    // Failure attribution: which leg was in flight when the request failed.
+    let phase = 'request';
     let route;
     let model;
+    let upstreamStatus;
+    let bytesSent = 0;
     response.on('close', () => {
       if (!response.writableFinished && !controller.signal.aborted) {
         clientCancelled = true;
@@ -160,25 +188,35 @@ export async function startPilot(config, deepseekKey, capability) {
       else if (encoding) throw new Error('Unsupported request compression');
       const payload = JSON.parse(bytes.toString('utf8'));
       const isChild = payload.model === config.child_model;
-      route = isChild ? 'deepseek' : 'native';
-      model = payload.model;
       if (!isChild && payload.model && !config.native_models.includes(payload.model)) throw new Error('Model outside configured catalog');
       if (isChild && path !== '/responses') throw new Error('DeepSeek supports only the Responses endpoint');
+      // Only the catalog-validated model reaches the receipts.
+      model = payload.model;
       const headers = nativeHeaders(request.headers);
       if (!headers.authorization) throw new Error('Missing Codex authentication');
       let body = payload;
       let namespaces;
       if (isChild) {
         const input = [];
-        for (const item of payload.input) input.push(item.type === 'agent_message' ? await handoff(item, headers, controller.signal) : item);
+        for (const item of payload.input) {
+          if (item.type !== 'agent_message') { input.push(item); continue; }
+          phase = 'relay';
+          route = 'relay';
+          input.push(await handoff(item, headers, controller.signal, telemetry));
+          phase = 'request';
+          route = undefined;
+        }
         const prepared = prepareDeepseek(payload, input);
         body = prepared.payload;
         namespaces = prepared.namespaces;
       } else body = { ...payload, input: plaintextHandoffs(payload.input) };
       const nativeUrl = config.native_url.replace(/\/responses$/, '') + path;
+      phase = 'upstream';
+      route = isChild ? 'deepseek' : 'native';
       const result = await upstream(isChild ? config.deepseek_url : nativeUrl,
         isChild ? { 'content-type': 'application/json', authorization: `Bearer ${deepseekKey}` } : headers,
         body, controller.signal);
+      upstreamStatus = result.status;
       const entry = {
         route: isChild ? 'deepseek' : 'native', model: payload.model, http_status: result.status,
         recipients: Array.isArray(payload.input) ? payload.input.filter(item => item.type === 'agent_message').map(item => item.recipient) : [],
@@ -199,6 +237,7 @@ export async function startPilot(config, deepseekKey, capability) {
         length += chunk.length;
         if (length > config.max_response_bytes) throw new Error('Response size limit exceeded');
         chunks.push(Buffer.from(chunk));
+        bytesSent = length;
         if (!response.write(chunk)) await once(response, 'drain', { signal: controller.signal });
       }
       const text = Buffer.concat(chunks).toString('utf8');
@@ -215,14 +254,30 @@ export async function startPilot(config, deepseekKey, capability) {
         const visible = output.filter(item => item.type === 'message').flatMap(item => item.content || []).filter(part => part.type === 'output_text').map(part => part.text).join('\n');
         entry.answers = config.markers.map(marker => visible.includes(marker));
       }
-      receipt(entry);
+      entry.bytes_sent = bytesSent;
+      receipt({ ...entry, ...telemetry() });
       response.end();
     } catch (error) {
+      const outcome = clientCancelled ? 'client_disconnect' : timedOut ? 'timeout'
+        : phase === 'request' ? 'local_error' : 'upstream_error';
       if (clientCancelled) {
-        receipt({ route: 'cancelled', upstream_route: route, model, reason: 'codex_disconnected' });
+        receipt({ route: 'cancelled', upstream_route: route, model, phase, reason: 'codex_disconnected', outcome,
+          bytes_sent: bytesSent, ...telemetry() });
         return;
       }
-      receipt({ route: 'error', message: String(error.message).replaceAll(deepseekKey, '[REDACTED]').replaceAll(capability, '[REDACTED]') });
+      // A JSON syntax error can quote the parsed text, so the message is generic by phase.
+      let message = error instanceof SyntaxError
+        ? (phase === 'request' ? 'Invalid JSON request body' : 'Invalid JSON upstream response')
+        : String(error.message);
+      for (const secret of [deepseekKey, capability]) {
+        if (typeof secret === 'string' && secret.length) message = message.replaceAll(secret, '[REDACTED]');
+      }
+      const failure = { route: 'error', phase, outcome, message,
+        error_code: safeErrorCode(error), bytes_sent: bytesSent };
+      if (route) failure.upstream_route = route;
+      if (model) failure.model = model;
+      if (upstreamStatus !== undefined) failure.http_status = upstreamStatus;
+      receipt({ ...failure, ...telemetry() });
       if (!response.headersSent) response.writeHead(502, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { message: 'DeepCodex request failed; inspect local receipts.' } }));
       else response.destroy();
     } finally { clearTimeout(timer); }

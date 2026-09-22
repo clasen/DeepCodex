@@ -211,6 +211,7 @@ export async function install() {
   if (!['darwin', 'linux', 'win32'].includes(process.platform)) throw new Error('DeepCodex supports macOS, Linux and Windows');
   const config = { ...readJson(path.join(ROOT, 'config/pilot.json')), ...readJson(path.join(ROOT, 'config/desktop.json')) };
   const original = loadConfig();
+  const provider = original.codex.model_providers[original.codex.model_provider];
   const env = workerEnvironment(process.env);
   loadCredentials(env, original);
   const diagnosis = doctor(original, env);
@@ -241,7 +242,7 @@ export async function install() {
     base_instructions: fs.readFileSync(path.join(ROOT, 'prompts/worker.md'), 'utf8') };
   privateWrite(path.join(STATE, 'models.json'), JSON.stringify({ models: [...nativeModels, child] }));
   Object.assign(config, { native_models: nativeModels.map(entry => entry.slug), child_model: child.slug,
-    deepseek_url: original.codex.model_providers['deepcodex-deepseek'].base_url + '/responses',
+    deepseek_url: provider.base_url + '/responses',
     receipts: path.join(STATE, 'receipts.jsonl'), markers: [] });
   const statePath = path.join(STATE, 'state.json');
   const capability = fs.existsSync(statePath) ? readJson(statePath).capability : randomBytes(32).toString('base64url');
@@ -251,7 +252,8 @@ export async function install() {
     agents: { enabled: true, default_subagent_model: child.slug, default_subagent_reasoning_effort: 'high' },
     features: { multi_agent: true, multi_agent_v2: true },
     'model_providers.deepcodex': { name: 'DeepCodex', base_url: `http://127.0.0.1:${config.port}`, wire_api: 'responses',
-      requires_openai_auth: true, supports_websockets: false, request_max_retries: 0, stream_max_retries: 0, stream_idle_timeout_ms: config.request_timeout_ms },
+      requires_openai_auth: true, supports_websockets: false, request_max_retries: provider.request_max_retries,
+      stream_max_retries: provider.stream_max_retries, stream_idle_timeout_ms: config.request_timeout_ms },
     'model_providers.deepcodex.http_headers': { 'x-deepcodex-pilot': capability },
   };
   let updated = mergeConfig(before, sections);

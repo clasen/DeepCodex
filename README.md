@@ -257,9 +257,22 @@ why a delegated task consumes both Codex quota and DeepSeek API usage.
 
 The router writes bounded receipts to
 `~/.config/deepcodex/desktop/receipts.jsonl`: routing decisions, model names,
-tool names, task counts and token usage. Prompts, tool arguments and credentials
-are not recorded. On errors, the receipt message has the DeepSeek key and the
+tool names, task counts, token usage, timestamps, request IDs, duration and bytes
+sent. Failed requests also record the phase, HTTP status when available and an
+allowlisted transport error code. Timeouts, client cancellations and upstream
+failures are distinguished. Relay receipts share the triggering request's ID.
+Prompts, tool arguments, headers and credentials are not recorded. JSON parsing
+errors use generic messages; other error messages have the DeepSeek key and the
 capability token redacted.
+
+Codex handles recovery with four HTTP retries and five stream retries, configured
+in `config/worker.json` and shared by Desktop, the pilot and standalone workers.
+These limits can combine: a persistent HTTP 503 produced 30 attempts with the
+tested CLI. Retries can increase latency and provider usage. The router does not
+replay a partially delivered response. A successfully completed worker turn can
+supersede earlier reconnection diagnostics; terminal failures remain failures.
+Run `deepcodex install` to apply policy changes to an existing Desktop installation,
+then fully quit and reopen Desktop and start a new task.
 
 ## Tests
 
@@ -268,10 +281,13 @@ pnpm test
 ```
 
 The default suite is offline: it uses fixtures and spends no provider usage. The
-Codex transport test is skipped unless `DEEPCODEX_TEST_CODEX` points at a real
-`codex` binary; when it is set, that test launches the real CLI against a local
-fixture server. Treat it as an optional, deliberate opt-in rather than part of a
-routine run. Windows command definitions and ACL handling have mocked tests; the
+Codex transport and recovery tests are skipped unless `DEEPCODEX_TEST_CODEX`
+points at a real `codex` binary. They launch the real CLI against local fixture
+servers, including the router, to check interrupted streams, HTTP failures,
+deadlines, tool execution across reconnection and retry exhaustion. They use
+test credentials and spend no provider usage. Treat them as an optional,
+deliberate opt-in rather than part of a routine run. Windows command definitions
+and ACL handling have mocked tests; the
 `.cmd` argument round trip, service supervisor and scheduled task stop tests run
 only on Windows. Integration fixtures that require
 POSIX shell scripts and process groups are skipped on Windows.

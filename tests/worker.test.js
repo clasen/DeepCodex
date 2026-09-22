@@ -138,6 +138,24 @@ test('no false success on a bad completion', POSIX_FIXTURE, async (t) => {
   }
 });
 
+test('completion supersedes recovered transport diagnostics but not terminal failures', () => {
+  const config = worker.loadConfig();
+  const retry = { type: 'error', message: 'Reconnecting... 1/5 (stream interrupted)' };
+  const completed = { type: 'turn.completed', usage: { input_tokens: 12, output_tokens: 3 } };
+  const parse = (events, code = 0, stop = null) => worker.parseResult(
+    events.map(event => JSON.stringify(event)).join('\n'), '', 'final answer', code, stop, config);
+  assert.equal(parse([retry, completed]).status, 'completed');
+  assert.deepEqual(parse([retry, completed]).usage, completed.usage);
+  assert.equal(parse([retry]).status, 'failed');
+  assert.equal(parse([retry, completed], 1).status, 'failed');
+  assert.equal(parse([retry, completed], 0, 'timeout').status, 'timeout');
+  assert.equal(parse([completed, retry]).status, 'failed');
+  const terminal = { type: 'turn.failed', error: { message: 'provider failed' } };
+  assert.equal(parse([retry, terminal]).status, 'failed');
+  assert.equal(parse([terminal, completed]).status, 'failed');
+  assert.equal(worker.parseResult('invalid\n' + JSON.stringify(completed), '', 'final', 0, null, config).status, 'failed');
+});
+
 test('timeout kills the worker process group', POSIX_FIXTURE, async (t) => {
   const box = fixture(t);
   box.config.limits.timeout_seconds = 0.1;

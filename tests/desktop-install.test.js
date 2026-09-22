@@ -59,7 +59,7 @@ function drainingLaunchd(calls, state, stuck) {
   `;
 }
 
-function fixture(t, healthy, { marketplace = false, bundled = false, incompatible = false, pluginFailure = false, noPluginSupport = false, stopFailure = false, startFailure = false, registrationFailure = false, drainingStop = false, stuckStop = false, stopTimeoutSeconds, instructions, customCodexHome = false, platform = 'darwin' } = {}) {
+function fixture(t, healthy, { marketplace = false, bundled = false, incompatible = false, pluginFailure = false, noPluginSupport = false, stopFailure = false, startFailure = false, registrationFailure = false, drainingStop = false, stuckStop = false, stopTimeoutSeconds, instructions, customCodexHome = false, platform = 'darwin', config } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-install-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, "home & user's");
@@ -75,7 +75,7 @@ function fixture(t, healthy, { marketplace = false, bundled = false, incompatibl
   desktop.startup_timeout_seconds = 0;
   if (stopTimeoutSeconds !== undefined) desktop.service_stop_timeout_seconds = stopTimeoutSeconds;
   fs.writeFileSync(desktopFile, JSON.stringify(desktop));
-  const original = '# Preserve this\nmodel="gpt-6-astra"\n[mcp_servers.example]\ncommand="example"\n';
+  const original = config ?? '# Preserve this\nmodel="gpt-6-astra"\n[mcp_servers.example]\ncommand="example"\n';
   const configPath = path.join(codexHome, 'config.toml');
   fs.writeFileSync(configPath, original);
   if (marketplace) {
@@ -436,4 +436,51 @@ test('Linux unhealthy service is disabled before user configuration is changed',
   assert.match(installed.result.stderr, /did not become healthy/);
   assert.equal(fs.readFileSync(installed.configPath, 'utf8'), installed.original);
   assert.deepEqual(installed.calls.at(-1), ['--user', 'disable', '--now', 'com.deepcodex.router.service']);
+});
+
+// An install that already ran once left the managed provider with retries disabled. Reinstalling
+// must replace that policy with the canonical one from config/worker.json and keep every unrelated
+// setting, including on a second run.
+const RETRY_DISABLED_CONFIG = [
+  '# Preserve this',
+  'model = "gpt-6-astra"',
+  'model_provider = "deepcodex"',
+  'approval_policy = "on-request"',
+  '',
+  '[model_providers.deepcodex]',
+  'name = "DeepCodex"',
+  'base_url = "http://127.0.0.1:4207"',
+  'wire_api = "responses"',
+  'requires_openai_auth = true',
+  'supports_websockets = false',
+  'request_max_retries = 0',
+  'stream_max_retries = 0',
+  'stream_idle_timeout_ms = 120000',
+  '',
+  '[mcp_servers.example]',
+  'command = "example"',
+  '',
+].join('\n');
+
+test('reinstallation replaces the existing retry policy and preserves unrelated settings', t => {
+  const installed = fixture(t, true, { platform: 'linux', config: RETRY_DISABLED_CONFIG });
+  assert.equal(installed.result.status, 0, installed.result.stderr);
+  const read = () => parseToml(fs.readFileSync(installed.configPath, 'utf8'));
+  const first = read();
+  assert.equal(first.model_providers.deepcodex.request_max_retries, 4);
+  assert.equal(first.model_providers.deepcodex.stream_max_retries, 5);
+  assert.equal(first.model_providers.deepcodex.wire_api, 'responses');
+  assert.equal(first.model_providers.deepcodex.requires_openai_auth, true);
+  assert.equal(first.model, 'gpt-6-astra');
+  assert.equal(first.approval_policy, 'on-request');
+  assert.equal(first.mcp_servers.example.command, 'example');
+  const repeated = installed.run();
+  assert.equal(repeated.status, 0, repeated.stderr);
+  const second = read();
+  assert.equal(second.model_providers.deepcodex.request_max_retries, 4);
+  assert.equal(second.model_providers.deepcodex.stream_max_retries, 5);
+  assert.equal(second.model_providers.deepcodex.wire_api, 'responses');
+  assert.equal(second.model, 'gpt-6-astra');
+  assert.equal(second.approval_policy, 'on-request');
+  assert.equal(second.mcp_servers.example.command, 'example');
 });

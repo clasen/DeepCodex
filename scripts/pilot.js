@@ -139,10 +139,11 @@ export async function run() {
   });
   const capability = randomBytes(32).toString('base64url');
   const provider = workerConfig.codex.model_provider;
+  const providerConfig = workerConfig.codex.model_providers[provider];
   Object.assign(config, {
     child_model: workerConfig.codex.model,
     native_models: [config.parent_model],
-    deepseek_url: `${workerConfig.codex.model_providers[provider].base_url}/responses`,
+    deepseek_url: `${providerConfig.base_url}/responses`,
     receipts: path.join(runDir, 'receipts.jsonl'),
     markers,
   });
@@ -184,8 +185,8 @@ export async function run() {
         requires_openai_auth: true,
         supports_websockets: false,
         http_headers: { 'x-deepcodex-pilot': capability },
-        request_max_retries: 0,
-        stream_max_retries: 0,
+        request_max_retries: providerConfig.request_max_retries,
+        stream_max_retries: providerConfig.stream_max_retries,
         stream_idle_timeout_ms: config.request_timeout_ms,
       } };
       const flat = configArgs(values);
