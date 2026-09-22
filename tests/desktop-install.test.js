@@ -10,7 +10,56 @@ import { copyRuntime } from '../scripts/desktop.js';
 import { parseToml } from '../scripts/toml.js';
 import { ROOT } from '../scripts/worker.js';
 
-function fixture(t, healthy, { marketplace = false, bundled = false, incompatible = false, pluginFailure = false, noPluginSupport = false, stopFailure = false, startFailure = false, registrationFailure = false, instructions, customCodexHome = false, platform = 'darwin' } = {}) {
+// The installer asks launchd for the service state before bootstrapping, so the service
+// transitions are the bootout and bootstrap calls.
+const serviceCommands = calls => calls.map(args => args[0]).filter(name => name !== 'print');
+
+// launchd reports a booted-out job as registered until its process exits, so this stub keeps the
+// label present while its drain counter runs out. stuck keeps it registered indefinitely.
+function drainingLaunchd(calls, state, stuck) {
+  return `#!${process.execPath}
+    const fs = require('node:fs');
+    const args = process.argv.slice(2);
+    fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + '\\n');
+    const file = ${JSON.stringify(state)};
+    const read = () => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return { loaded: true, draining: 2 }; } };
+    const write = value => fs.writeFileSync(file, JSON.stringify(value));
+    if (args[0] === 'bootout') {
+      if (!read().loaded) {
+        console.error('Boot-out failed: 3: No such process');
+        process.exit(3);
+      }
+      write({ loaded: true, draining: 2 });
+      process.exit(0);
+    }
+    if (args[0] === 'print') {
+      const current = read();
+      if (!current.loaded) {
+        console.error('Could not find service in domain for user gui: 501');
+        process.exit(113);
+      }
+      if (${stuck}) process.exit(0);
+      if (current.draining > 0) {
+        write({ loaded: true, draining: current.draining - 1 });
+        process.exit(0);
+      }
+      write({ loaded: false, draining: 0 });
+      console.error('Could not find service in domain for user gui: 501');
+      process.exit(113);
+    }
+    if (args[0] === 'bootstrap') {
+      if (read().loaded) {
+        console.error('Bootstrap failed: 5: Input/output error');
+        process.exit(5);
+      }
+      write({ loaded: true, draining: 0 });
+      process.exit(0);
+    }
+    process.exit(9);
+  `;
+}
+
+function fixture(t, healthy, { marketplace = false, bundled = false, incompatible = false, pluginFailure = false, noPluginSupport = false, stopFailure = false, startFailure = false, registrationFailure = false, drainingStop = false, stuckStop = false, stopTimeoutSeconds, instructions, customCodexHome = false, platform = 'darwin' } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-install-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, "home & user's");
@@ -24,6 +73,7 @@ function fixture(t, healthy, { marketplace = false, bundled = false, incompatibl
   const desktopFile = path.join(source, 'config/desktop.json');
   const desktop = JSON.parse(fs.readFileSync(desktopFile));
   desktop.startup_timeout_seconds = 0;
+  if (stopTimeoutSeconds !== undefined) desktop.service_stop_timeout_seconds = stopTimeoutSeconds;
   fs.writeFileSync(desktopFile, JSON.stringify(desktop));
   const original = '# Preserve this\nmodel="gpt-6-astra"\n[mcp_servers.example]\ncommand="example"\n';
   const configPath = path.join(codexHome, 'config.toml');
@@ -59,7 +109,9 @@ function fixture(t, healthy, { marketplace = false, bundled = false, incompatibl
     fs.renameSync(path.join(bin, 'codex'), path.join(resources, 'codex'));
   }
   const calls = path.join(root, 'launchctl.jsonl');
-  fs.writeFileSync(path.join(bin, 'launchctl'), `#!${process.execPath}
+  fs.writeFileSync(path.join(bin, 'launchctl'), drainingStop || stuckStop
+    ? drainingLaunchd(calls, path.join(root, 'launchd.json'), stuckStop)
+    : `#!${process.execPath}
     require('node:fs').appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + '\\n');
     if (${stopFailure} && process.argv[2] === 'bootout') {
       console.error('Boot-out failed: 1: Operation not permitted');
@@ -68,6 +120,10 @@ function fixture(t, healthy, { marketplace = false, bundled = false, incompatibl
     if (${startFailure} && process.argv[2] === 'bootstrap') {
       console.error('Bootstrap failed: 5: Input/output error');
       process.exit(5);
+    }
+    if (process.argv[2] === 'print') {
+      console.error('Could not find service in domain for user gui: 501');
+      process.exit(113);
     }
   `, { mode: 0o700 });
   const preload = path.join(root, 'health.js');
@@ -117,7 +173,7 @@ macTest('installation associates the LaunchAgent with a branded app that runs th
   const manifest = JSON.parse(fs.readFileSync(path.join(plugin, '.codex-plugin/plugin.json')));
   assert.deepEqual(fs.readFileSync(path.join(plugin, manifest.interface.logo)), fs.readFileSync(path.join(ROOT, manifest.interface.logo)));
   assert.equal(fs.readFileSync(path.join(home, '.config/deepcodex/desktop/config.before.toml'), 'utf8'), original);
-  assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap']);
+  assert.deepEqual(serviceCommands(calls), ['bootout', 'bootstrap']);
   const plist = path.join(home, 'Library/LaunchAgents/com.deepcodex.router.plist');
   const converted = spawnSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', plist], { encoding: 'utf8' });
   assert.equal(converted.status, 0, converted.stderr);
@@ -156,7 +212,7 @@ macTest('installation uses the Desktop CLI without a codex command on PATH', t =
   const { result, calls } = fixture(t, true, { bundled: true });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /DeepCodex installed successfully/);
-  assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap']);
+  assert.deepEqual(serviceCommands(calls), ['bootout', 'bootstrap']);
 });
 
 macTest('installation stops the current service before starting it', t => {
@@ -165,6 +221,7 @@ macTest('installation stops the current service before starting it', t => {
   const domain = `gui/${process.getuid()}`;
   assert.deepEqual(calls, [
     ['bootout', `${domain}/com.deepcodex.router`],
+    ['print', `${domain}/com.deepcodex.router`],
     ['bootstrap', domain, path.join(home, 'Library/LaunchAgents/com.deepcodex.router.plist')],
   ]);
 });
@@ -184,6 +241,29 @@ macTest('a failed bootstrap reports its actual error and preserves configuration
   assert.equal(fs.readFileSync(configPath, 'utf8'), original);
 });
 
+macTest('reinstallation waits for the previous LaunchAgent to stop before bootstrapping again', t => {
+  const { result, configPath, calls } = fixture(t, true, { drainingStop: true });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /DeepCodex installed successfully/);
+  assert.equal(parseToml(fs.readFileSync(configPath, 'utf8')).model_provider, 'deepcodex');
+  const commands = calls.map(args => args[0]);
+  assert.equal(commands[0], 'bootout');
+  assert.equal(commands.at(-1), 'bootstrap');
+  assert.equal(commands.filter(name => name === 'bootstrap').length, 1);
+  assert.ok(commands.slice(1, -1).length > 0 && commands.slice(1, -1).every(name => name === 'print'), commands.join(' '));
+});
+
+macTest('a LaunchAgent that never stops fails within the stop budget and preserves configuration', t => {
+  const { result, configPath, original, calls } = fixture(t, true, { stuckStop: true, stopTimeoutSeconds: 1 });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Cannot start DeepCodex LaunchAgent: com\.deepcodex\.router did not stop within 1 seconds/);
+  assert.equal(fs.readFileSync(configPath, 'utf8'), original);
+  const commands = calls.map(args => args[0]);
+  assert.equal(commands[0], 'bootout');
+  assert.equal(commands.includes('bootstrap'), false);
+  assert.ok(commands.slice(1).length > 0 && commands.slice(1).every(name => name === 'print'), commands.join(' '));
+});
+
 macTest('incompatible CLI explains the prerequisite failure before modifying configuration', t => {
   const { configPath, original, result, calls } = fixture(t, true, { incompatible: true });
   assert.equal(result.status, 1);
@@ -199,7 +279,7 @@ macTest('unhealthy service leaves user configuration unchanged and stops the att
   assert.doesNotMatch(result.stdout, /installed successfully/);
   assert.equal(fs.readFileSync(configPath, 'utf8'), original);
   assert.equal(fs.existsSync(path.join(path.dirname(configPath), 'AGENTS.md')), false);
-  assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap', 'bootout']);
+  assert.deepEqual(serviceCommands(calls), ['bootout', 'bootstrap', 'bootout']);
 });
 
 macTest('missing plugin support fails before starting a service or changing user config', t => {
@@ -216,7 +296,7 @@ macTest('plugin install failure is reported and stops the attempted service', t 
   assert.match(result.stderr, /Cannot add Codex plugin/);
   assert.equal(fs.readFileSync(configPath, 'utf8'), original);
   assert.equal(fs.existsSync(path.join(path.dirname(configPath), 'AGENTS.md')), false);
-  assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap', 'bootout']);
+  assert.deepEqual(serviceCommands(calls), ['bootout', 'bootstrap', 'bootout']);
 });
 
 macTest('installation preserves unrelated marketplace entries', t => {
@@ -318,7 +398,7 @@ macTest('uninstall refuses changed config before stopping the service or deletin
   assert.equal(fs.readFileSync(installed.configPath, 'utf8'), changed);
   assert.equal(fs.existsSync(path.join(installed.home, '.local/share/deepcodex/runtime')), true);
   const calls = fs.readFileSync(path.join(path.dirname(installed.home), 'launchctl.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.deepEqual(calls.map(args => args[0]), ['bootout', 'bootstrap']);
+  assert.deepEqual(serviceCommands(calls), ['bootout', 'bootstrap']);
 });
 
 macTest('failed service stop retains runtime and permits retry after config restoration', t => {

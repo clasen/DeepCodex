@@ -146,6 +146,25 @@ function runCodex(binary, args, env) {
   return spawnSync(plan.file, plan.args, { env, encoding: 'utf8', ...plan.options });
 }
 
+// launchd removes a booted-out job asynchronously: while the previous instance is still exiting,
+// bootstrap fails with "Bootstrap failed: 5: Input/output error". Wait for the label to disappear,
+// within the stop budget, before starting the job again.
+async function startLaunchAgent(domain, label, plist, config, intervalMs) {
+  const timeout = config.service_stop_timeout_seconds;
+  if (!Number.isFinite(timeout) || timeout < 0) throw new Error('service_stop_timeout_seconds must be a non-negative number');
+  const deadline = Date.now() + timeout * 1000;
+  while (spawnSync('launchctl', ['print', `${domain}/${label}`], { encoding: 'utf8' }).status === 0) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Cannot start DeepCodex LaunchAgent: ${label} did not stop within ${timeout} seconds`);
+    }
+    await sleep(intervalMs);
+  }
+  const bootstrap = spawnSync('launchctl', ['bootstrap', domain, plist], { encoding: 'utf8' });
+  if (bootstrap.error || bootstrap.status !== 0) {
+    throw new Error(`Cannot start DeepCodex LaunchAgent: ${bootstrap.error?.message || bootstrap.stderr.trim() || `launchctl exited ${bootstrap.status}`}`);
+  }
+}
+
 export function installPlugin(root, codex, env) {
   const home = process.platform === 'win32' ? env.USERPROFILE || os.homedir() : env.HOME || os.homedir();
   const marketplacePath = path.join(home, '.agents/plugins/marketplace.json');
@@ -252,10 +271,7 @@ export async function install() {
     if (stopped.error || (stopped.status !== 0 && stopped.status !== 3)) {
       throw new Error(`Cannot stop ${label}: ${stopped.error?.message || stopped.stderr.trim() || `launchctl exited ${stopped.status}`}`);
     }
-    const bootstrap = spawnSync('launchctl', ['bootstrap', domain, plist], { encoding: 'utf8' });
-    if (bootstrap.error || bootstrap.status !== 0) {
-      throw new Error(`Cannot start DeepCodex LaunchAgent: ${bootstrap.error?.message || bootstrap.stderr.trim() || `launchctl exited ${bootstrap.status}`}`);
-    }
+    await startLaunchAgent(domain, label, plist, config, original.limits.poll_interval_seconds * 1000);
   } else userService('install', state, env);
   const deadline = Date.now() + config.startup_timeout_seconds * 1000;
   let report;
