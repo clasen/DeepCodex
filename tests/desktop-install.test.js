@@ -107,7 +107,7 @@ macTest('installation associates the LaunchAgent with a branded app that runs th
   assert.match(result.stdout, /fully quit and reopen Codex Desktop, then start a new task/);
   assert.match(result.stdout, /deepcodex status/);
   assert.doesNotMatch(result.stdout, /"status"|"pid"|"restart_desktop_required"/);
-  assert.match(fs.readFileSync(path.join(home, '.codex/AGENTS.md'), 'utf8'), /Always consider DeepCodex when planning a task\. You are the orchestrator\./);
+  assert.match(fs.readFileSync(path.join(home, '.codex/AGENTS.md'), 'utf8'), /## DeepCodex\n\nKeep the orchestrator on the user's selected model\./);
   const parsed = parseToml(fs.readFileSync(configPath, 'utf8'));
   assert.equal(parsed.model, 'gpt-6-astra');
   assert.equal(parsed.mcp_servers.example.command, 'example');
@@ -264,9 +264,9 @@ macTest('global instructions respect CODEX_HOME, refresh the managed block on re
   const filename = path.join(path.dirname(installed.configPath), 'AGENTS.md');
   const instructions = fs.readFileSync(filename, 'utf8');
   assert.ok(instructions.endsWith(original));
-  assert.match(instructions, /Always consider DeepCodex when planning a task\. You are the orchestrator\./);
+  assert.match(instructions, /## DeepCodex\n\nKeep the orchestrator on the user's selected model\./);
   assert.equal(fs.existsSync(path.join(installed.home, '.codex/AGENTS.md')), false);
-  const customized = instructions.replace('You are the orchestrator.', 'Coordinate and review the results.') + '\n# Later user edit\n';
+  const customized = instructions.replace('Keep the orchestrator on the user\'s selected model.', 'Coordinate and review the results.') + '\n# Later user edit\n';
   fs.writeFileSync(filename, customized);
   const repeated = installed.run();
   assert.equal(repeated.status, 0, repeated.stderr);
