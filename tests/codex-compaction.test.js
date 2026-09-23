@@ -9,7 +9,8 @@ import test from 'node:test';
 import { startPilot } from '../scripts/pilot-router.js';
 import { loadConfig, runWorker, workerEnvironment } from '../scripts/worker.js';
 
-// Opt-in: the installed Codex client compacts through the router without a native summary.
+// Opt-in: the installed Codex client compacts through the router, which answers with a local
+// reference only when Jev prunes the history and relays the compaction natively otherwise.
 // Compaction runs on every turn here because the fixture sets a one-token auto-compact limit:
 // that exercises the transport repeatedly instead of waiting for a real context to fill.
 test('real Codex continues after a local Jev compaction without a native summary',
@@ -37,10 +38,15 @@ test('real Codex continues after a local Jev compaction without a native summary
       const text = Buffer.concat(parts).toString('utf8');
       const payload = JSON.parse(text);
       requests.push({ text, payload });
-      const item = !issued.has('keep') ? call('keep')
-        : !issued.has('drop') ? call('drop')
-          : { id: 'msg_done', type: 'message', role: 'assistant', status: 'completed',
-            content: [{ type: 'output_text', text: 'fixture compacted completion', annotations: [] }] };
+      // A compaction the router relays natively expects a summary in place of a tool call; the
+      // local path never sends its checkpoint instruction here.
+      const item = text.includes('CONTEXT CHECKPOINT COMPACTION')
+        ? { id: 'msg_summary', type: 'message', role: 'assistant', status: 'completed',
+          content: [{ type: 'output_text', text: 'fixture native summary', annotations: [] }] }
+        : !issued.has('keep') ? call('keep')
+          : !issued.has('drop') ? call('drop')
+            : { id: 'msg_done', type: 'message', role: 'assistant', status: 'completed',
+              content: [{ type: 'output_text', text: 'fixture compacted completion', annotations: [] }] };
       const result = { id: `resp_${requests.length}`, object: 'response', created_at: 0, model: payload.model,
         status: 'completed', output: [item], usage: { input_tokens: 40, output_tokens: 5, total_tokens: 45 } };
       const events = [
@@ -86,14 +92,17 @@ test('real Codex continues after a local Jev compaction without a native summary
     assert.equal(result.status, 'completed',
       JSON.stringify({ result, receipt_routes: entries.map(entry => entry.route), upstream: requests.length }));
     assert.equal(result.result.trim(), 'fixture compacted completion');
-    // The client compacted more than once and the router answered those requests locally.
-    assert.ok(entries.filter(entry => entry.route === 'compaction').length >= 2, JSON.stringify(entries));
-    // Neither the checkpoint instruction nor a local reference ever reached the provider.
-    assert.equal(requests.filter(entry => entry.text.includes('CONTEXT CHECKPOINT COMPACTION')).length, 0);
+    // Only a compaction that prunes the history is answered locally; one that would remove nothing
+    // continues as the native summary, and its receipt carries the fallback reason.
+    assert.ok(entries.filter(entry => entry.route === 'compaction').length >= 1, JSON.stringify(entries));
+    // A local reference never reaches the provider, and the checkpoint instruction reaches it only
+    // once per native fallback.
+    assert.equal(requests.filter(entry => entry.text.includes('CONTEXT CHECKPOINT COMPACTION')).length,
+      entries.filter(entry => entry.compaction_fallback).length);
     assert.equal(requests.filter(entry => entry.text.includes('deepcodex-jev-v1:')).length, 0);
-    // Every turn after the first carries the exchange Jev kept, with its call and result
-    // exactly once each, and never the reference the client is holding.
-    for (const entry of requests.slice(1)) {
+    // Every request that still carries the exchange Jev kept carries its call and result exactly
+    // once each, and never the reference the client is holding.
+    for (const entry of requests.filter(entry => entry.text.includes('call_keep'))) {
       const called = entry.payload.input.filter(item => item.type === 'function_call' && item.call_id === 'call_keep');
       const answered = entry.payload.input.filter(item => item.type === 'function_call_output' && item.call_id === 'call_keep');
       assert.deepEqual([called.length, answered.length], [1, 1]);
@@ -101,6 +110,4 @@ test('real Codex continues after a local Jev compaction without a native summary
     // The exchange Jev dropped is gone from the history the provider receives.
     const last = requests.at(-1).payload.input;
     assert.equal(last.filter(item => item.call_id === 'call_drop').length, 0);
-    assert.equal(last.filter(item => item.type === 'function_call_output'
-      && String(item.output).includes('KEEP-MARKER')).length, 1);
   });

@@ -123,6 +123,9 @@ test('a summary reference replaces the whole prefix it stands for, exactly once'
   const after = [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'next' }] }];
   assert.deepEqual(expandReferences([...stored.slice(0, 2), reference, ...after], store), [...stored, ...after]);
   assert.deepEqual(expandReferences(after, store), after);
+  const mentioned = { type: 'message', role: 'user',
+    content: [{ type: 'input_text', text: `Please inspect ${REFERENCE}not-a-uuid in this log.` }] };
+  assert.deepEqual(expandReferences([mentioned], store), [mentioned]);
   assert.throws(() => expandReferences([reference], null), /Invalid local compaction reference/);
   const truncated = { type: 'message', role: 'user', content: [{ type: 'input_text', text: `${SUMMARY_PREAMBLE}\n${REFERENCE}not-a-uuid` }] };
   assert.throws(() => expandReferences([truncated], store), /Invalid local compaction reference/);
@@ -148,6 +151,7 @@ async function harness(t, { config = {}, jevAsker = retainRecentOnly } = {}) {
   const store = `deepcodex-compaction-test-${randomUUID()}`;
   const servers = [];
   const received = [];
+  const forwardedHeaders = [];
   t.after(async () => {
     for (const server of servers) {
       server.closeAllConnections();
@@ -160,6 +164,7 @@ async function harness(t, { config = {}, jevAsker = retainRecentOnly } = {}) {
     const parts = [];
     for await (const part of request) parts.push(part);
     received.push(Buffer.concat(parts).toString('utf8'));
+    forwardedHeaders.push(request.headers);
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     response.end(sse(completedEvents(NATIVE_MODEL)));
   });
@@ -182,7 +187,7 @@ async function harness(t, { config = {}, jevAsker = retainRecentOnly } = {}) {
   const router = await startRouter();
   const url = () => `http://127.0.0.1:${router.address().port}/responses`;
   return {
-    storeDirectory: path.join(os.tmpdir(), store), receipts, received, startRouter,
+    storeDirectory: path.join(os.tmpdir(), store), receipts, received, forwardedHeaders, startRouter,
     entries: () => fs.existsSync(receipts)
       ? fs.readFileSync(receipts, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
       : [],
@@ -282,14 +287,14 @@ test('OpenRouter decisions compact and continue through the router without a nat
 });
 
 test('a reference saved by an earlier router survives a restart', async t => {
-  const box = await harness(t, { config: enabled, jevAsker: keepEverything });
+  const box = await harness(t, { config: enabled });
   const items = conversation({ calls: [['call_a', 'run a', 'a out']] });
   const reference = await referenceFrom(box, items);
   const response = await box.restartedRequest([summary(reference)]);
   assert.equal(response.status, 200);
   await response.text();
   assert.equal(box.received.length, 1);
-  assert.deepEqual(JSON.parse(box.received[0]).input, items);
+  assert.deepEqual(JSON.parse(box.received[0]).input, items.filter(item => item.call_id === undefined));
   assert.ok(!box.received[0].includes(REFERENCE));
 });
 
@@ -342,4 +347,166 @@ test('an unusable reference fails before the provider sees an incomplete history
   assert.equal(truncated.status, 502);
   assert.equal(box.entries().at(-1).message, 'Invalid local compaction reference');
   assert.deepEqual(box.received, []);
+});
+
+test('a failed Jev decision continues as the native compaction instead of failing the turn', async t => {
+  const asker = () => {
+    throw new Error('Jev request is 320357 characters, above jev_compaction.max_state_chars (100000)');
+  };
+  const box = await harness(t, { config: enabled, jevAsker: asker });
+  const items = conversation({ calls: [['call_a', 'run a', 'a out']] });
+  const response = await box.compact(items);
+  assert.equal(response.status, 200);
+  await response.text();
+  // The provider receives the original compaction request: the checkpoint instruction and the
+  // history it stands for, never the local reference.
+  assert.equal(box.received.length, 1);
+  assert.deepEqual(JSON.parse(box.received[0]).input, [...items, instruction]);
+  assert.ok(!box.received[0].includes(REFERENCE));
+  // The client metadata that marks the request as a compaction travels with the fallback.
+  assert.equal(box.forwardedHeaders[0]['x-codex-turn-metadata'], COMPACTION_METADATA);
+  // The turn ends as a native request that carries the reason for the fallback.
+  const [entry] = box.entries();
+  assert.equal(entry.route, 'native');
+  assert.equal(entry.http_status, 200);
+  assert.equal(entry.completed, true);
+  assert.equal(entry.compaction_fallback, 'request_too_large');
+});
+
+test('the fallback record keeps a fixed reason code instead of the asker text', async t => {
+  const sentinel = 'history-sentinel-7fa';
+  const asker = () => {
+    throw new Error(`Jev state is 320357 characters, above jev_compaction.max_state_chars (100000) ${sentinel}`);
+  };
+  const box = await harness(t, { config: enabled, jevAsker: asker });
+  const response = await box.compact(conversation({ calls: [['call_a', 'run a', 'a out']] }));
+  assert.equal(response.status, 200);
+  await response.text();
+  const [entry] = box.entries();
+  assert.equal(entry.compaction_fallback, 'state_too_large');
+  assert.equal(box.entries().find(candidate => candidate.route === 'error'), undefined);
+  assert.ok(!fs.readFileSync(box.receipts, 'utf8').includes(sentinel));
+});
+
+test('a compaction that removes nothing continues as the native summary', async t => {
+  const box = await harness(t, { config: enabled, jevAsker: keepEverything });
+  // A history the asker left whole and a history with no tool exchange at all both leave the
+  // provider the same context, so neither is answered with a local reference.
+  const plain = conversation({ calls: [] });
+  const first = await box.compact(plain);
+  assert.equal(first.status, 200);
+  await first.text();
+  assert.deepEqual(JSON.parse(box.received[0]).input, [...plain, instruction]);
+  assert.equal(box.entries().at(-1).route, 'native');
+  assert.equal(box.entries().at(-1).compaction_fallback, 'no_reduction');
+  const items = conversation({ calls: [['call_a', 'run a', 'a out']] });
+  const response = await box.compact(items);
+  assert.equal(response.status, 200);
+  await response.text();
+  assert.equal(box.received.length, 2);
+  assert.deepEqual(JSON.parse(box.received[1]).input, [...items, instruction]);
+  assert.ok(!box.received[1].includes(REFERENCE));
+  assert.equal(box.entries().at(-1).route, 'native');
+  assert.equal(box.entries().at(-1).compaction_fallback, 'no_reduction');
+});
+
+test('Jev keeps compacting under its limit and steps aside above it', async t => {
+  const small = conversation({ calls: [['call_a', 'run a', 'a out']] });
+  const limit = JSON.stringify({ items: small }).length;
+  const asker = ({ items, exchanges }) => {
+    const state = JSON.stringify({ items });
+    if (state.length > limit) {
+      throw new Error(`Jev request is ${state.length} characters, above jev_compaction.max_state_chars (${limit})`);
+    }
+    return exchanges.map(() => ({ keepCall: false, keepResult: false }));
+  };
+  const box = await harness(t, { config: enabled, jevAsker: asker });
+  const reference = await referenceFrom(box, small);
+  assert.ok(reference.startsWith(REFERENCE));
+  assert.deepEqual(box.received, []);
+  assert.equal(box.entries().at(-1).route, 'compaction');
+  assert.equal(box.entries().at(-1).completed, true);
+  const big = conversation({ calls: Array.from({ length: 40 }, (_, index) =>
+    [`call_${index}`, `run ${index}`, 'x'.repeat(80)]) });
+  const response = await box.compact(big);
+  assert.equal(response.status, 200);
+  await response.text();
+  assert.equal(box.received.length, 1);
+  assert.ok(box.received[0].includes(INSTRUCTION));
+  assert.ok(!box.received[0].includes(REFERENCE));
+  assert.equal(box.entries().at(-1).route, 'native');
+  assert.equal(box.entries().at(-1).compaction_fallback, 'request_too_large');
+});
+
+test('a compaction the router already timed out is reported as a timeout, not as a fallback', async t => {
+  const asker = () => new Promise((resolve, reject) => {
+    setTimeout(() => reject(new Error('decisions request timed out after 150 ms')), 400);
+  });
+  const box = await harness(t, { config: { ...enabled, request_timeout_ms: 150 }, jevAsker: asker });
+  const response = await box.request(conversation({ calls: [['call_a', 'run a', 'a out']] }),
+    { headers: { 'x-codex-turn-metadata': COMPACTION_METADATA } });
+  assert.equal(response.status, 502);
+  const [failure] = box.entries();
+  assert.equal(failure.route, 'error');
+  assert.equal(failure.outcome, 'timeout');
+  assert.equal(failure.phase, 'request');
+  assert.equal(failure.upstream_route, 'compaction');
+  assert.equal(failure.http_status, undefined);
+  assert.deepEqual(box.received, []);
+});
+
+// 60 exchanges ask 120 questions, so the default max_questions of 100 needs two batches.
+const longConversation = () => conversation({ calls: Array.from({ length: 60 }, (_, index) =>
+  [`call_${index}`, `run ${index}`, 'out']) });
+
+test('a long conversation compacts locally through several batches in one event', async t => {
+  let requests = 0;
+  const jevAsker = createJevAsker(PILOT_CONFIG, 'fixture-openrouter-key', {
+    fetchImpl: async (url, options) => {
+      requests += 1;
+      const payload = JSON.parse(options.body);
+      return new Response(JSON.stringify({ answers: Object.fromEntries(
+        Object.keys(payload.questions).map(key => [key, { noul: 0.1 }])) }));
+    },
+  });
+  const box = await harness(t, { config: enabled, jevAsker });
+  const items = longConversation();
+  const reference = await referenceFrom(box, items);
+  assert.ok(reference.startsWith(REFERENCE));
+  // Both batches answered under one local compaction: no native summary and no extra event.
+  assert.equal(requests, 2);
+  assert.deepEqual(box.received, []);
+  const [entry] = box.entries();
+  assert.equal(entry.route, 'compaction');
+  assert.equal(entry.completed, true);
+  assert.ok(entry.dropped_items > 0);
+  assert.deepEqual(createStore(box.storeDirectory).load(reference.slice(REFERENCE.length)),
+    items.filter(item => !item.call_id));
+});
+
+test('a batch that fails mid-way continues as the native compaction with the whole history', async t => {
+  let issued = 0;
+  const jevAsker = createJevAsker(PILOT_CONFIG, 'fixture-openrouter-key', {
+    fetchImpl: async (url, options) => {
+      issued += 1;
+      if (issued === 2) return new Response('upstream-body', { status: 500 });
+      const payload = JSON.parse(options.body);
+      return new Response(JSON.stringify({ answers: Object.fromEntries(
+        Object.keys(payload.questions).map(key => [key, { noul: 0.1 }])) }));
+    },
+  });
+  const box = await harness(t, { config: enabled, jevAsker });
+  const items = longConversation();
+  const response = await box.compact(items);
+  assert.equal(response.status, 200);
+  await response.text();
+  // The plan issued both batches, but the failing one leaves nothing pruned or stored.
+  assert.equal(issued, 2);
+  assert.equal(box.received.length, 1);
+  assert.deepEqual(JSON.parse(box.received[0]).input, [...items, instruction]);
+  assert.ok(!box.received[0].includes(REFERENCE));
+  const [entry] = box.entries();
+  assert.equal(entry.route, 'native');
+  assert.equal(entry.compaction_fallback, 'decisions_failed');
+  assert.deepEqual(fs.existsSync(box.storeDirectory) ? fs.readdirSync(box.storeDirectory) : [], []);
 });

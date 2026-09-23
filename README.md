@@ -141,8 +141,14 @@ owner-only ACL. The keys are stored as plaintext in that file.
 The final prompt controls Jev compaction. The choice is stored in
 `~/.config/deepcodex/settings.json` with the same private permissions. `configure`
 does not start or restart the router; run `deepcodex install` to apply the choice
-to the installed service. When enabled, compaction sends conversation history,
-including tool calls and results, to OpenRouter for Jev decisions.
+to the installed service. When enabled, compaction asks OpenRouter for Jev
+decisions over a bounded view of the conversation: user and assistant texts,
+tool call names and clipped inputs, and result sizes without result bodies.
+The state and each request have character and estimated token limits. Questions
+are split into batches when they exceed one request's budget; each batch sees the
+same bounded state. If the state or one exchange cannot fit, a batch fails, or
+the decisions would remove nothing, compaction continues through the native
+Codex path. The receipt records the fallback with a fixed reason code.
 
 The command does not accept a key argument or piped input, keeping the key out
 of shell history and process arguments. Press Ctrl-C to cancel without changing

@@ -21,6 +21,7 @@ const STORE_VERSION = 1;
 // The client's checkpoint instruction is scaffolding, not conversation, so it is left out
 // of the stored history. A customized compact_prompt keeps the instruction in the store.
 const COMPACTION_INSTRUCTION = 'CONTEXT CHECKPOINT COMPACTION';
+const SUMMARY_PREAMBLE = 'Another language model started to solve this problem and produced a summary of its thinking process.';
 
 export function compactionDirectory(config) {
   return path.join(os.tmpdir(), config.jev_compaction.store);
@@ -37,15 +38,23 @@ export function compactionRequest(metadata) {
 
 // A tool exchange is a call item and the result that answers it. Everything else, including
 // a call whose result never arrived, is preserved verbatim.
+export function isToolCall(item) {
+  return typeof item?.type === 'string' && item.type.endsWith('_call') && typeof item.call_id === 'string';
+}
+
+export function isToolResult(item) {
+  if (typeof item?.type !== 'string' || typeof item.call_id !== 'string') return false;
+  return item.type.endsWith('_call_output') || item.type === 'tool_search_output';
+}
+
 export function toolExchanges(items) {
   const results = new Map();
   items.forEach((item, index) => {
-    if (item?.type?.endsWith('_call_output') && typeof item.call_id === 'string') results.set(item.call_id, index);
-    else if (item?.type === 'tool_search_output' && typeof item.call_id === 'string') results.set(item.call_id, index);
+    if (isToolResult(item)) results.set(item.call_id, index);
   });
   const exchanges = [];
   items.forEach((item, index) => {
-    if (!item?.type?.endsWith('_call') || typeof item.call_id !== 'string') return;
+    if (!isToolCall(item)) return;
     if (!results.has(item.call_id)) return;
     exchanges.push({ callId: item.call_id, callIndex: index, resultIndex: results.get(item.call_id) });
   });
@@ -108,9 +117,9 @@ export function referenceText(id) {
 }
 
 function itemReference(item) {
-  if (item?.type !== 'message' || !Array.isArray(item.content)) return null;
+  if (item?.type !== 'message' || item.role !== 'user' || !Array.isArray(item.content)) return null;
   for (const part of item.content) {
-    if (typeof part?.text !== 'string') continue;
+    if (typeof part?.text !== 'string' || !part.text.startsWith(`${SUMMARY_PREAMBLE}\n`)) continue;
     const at = part.text.indexOf(REFERENCE_PREFIX);
     if (at === -1) continue;
     const found = REFERENCE.exec(part.text.slice(at));

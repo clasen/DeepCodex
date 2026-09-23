@@ -50,6 +50,22 @@ export function safeErrorCode(error) {
   return 'unknown';
 }
 
+// The asker runs over conversation history, so no failure text reaches a receipt. The budget
+// reasons stay distinguishable: the state alone, the state with its questions, or the questions.
+const compactionLimits = [
+  [/^Jev state is \d+ characters, above /, 'state_too_large'],
+  [/^Jev state is approximately \d+ tokens, above /, 'state_too_large'],
+  [/^Jev request is \d+ (?:characters|bytes), above /, 'request_too_large'],
+  [/^Jev request is approximately \d+ tokens, above /, 'request_too_large'],
+  [/^Jev request asks \d+ questions, above /, 'too_many_questions'],
+];
+
+function compactionReason(error) {
+  const message = String(error?.message ?? '');
+  for (const [pattern, reason] of compactionLimits) if (pattern.test(message)) return reason;
+  return 'decisions_failed';
+}
+
 export function sseEvents(text) {
   return text.split(/\r?\n\r?\n/).flatMap(frame => {
     const data = frame.split(/\r?\n/).filter(line => line.startsWith('data:'))
@@ -181,6 +197,7 @@ export async function startPilot(config, deepseekKey, capability, { jevAsker } =
     let model;
     let upstreamStatus;
     let bytesSent = 0;
+    let compactionFallback;
     response.on('close', () => {
       if (!response.writableFinished && !controller.signal.aborted) {
         clientCancelled = true;
@@ -241,15 +258,27 @@ export async function startPilot(config, deepseekKey, capability, { jevAsker } =
         if (config.jev_compaction?.enabled === true && Array.isArray(expanded)
           && compactionRequest(request.headers['x-codex-turn-metadata'])) {
           route = 'compaction';
-          const items = stripCompactionInstruction(expanded);
-          const pruned = await selectHistory(items, { asker: jevAsker, retainRecent: config.jev_compaction.retain_recent });
-          const text = compactionStream(payload.model, referenceText(store.save(pruned)), estimateTokens(pruned));
-          bytesSent = Buffer.byteLength(text);
-          response.writeHead(200, { 'content-type': 'text/event-stream' });
-          response.end(text);
-          receipt({ route: 'compaction', model: payload.model, http_status: 200, completed: true,
-            retained_items: pruned.length, dropped_items: items.length - pruned.length, ...telemetry() });
-          return;
+          try {
+            const items = stripCompactionInstruction(expanded);
+            const pruned = await selectHistory(items, { asker: jevAsker, retainRecent: config.jev_compaction.retain_recent });
+            // A stored reference is expanded again for the provider, so a history the asker left
+            // whole would not save context: only a pruned history is answered locally.
+            if (pruned.length === items.length) compactionFallback = 'no_reduction';
+            else {
+              const text = compactionStream(payload.model, referenceText(store.save(pruned)), estimateTokens(pruned));
+              bytesSent = Buffer.byteLength(text);
+              response.writeHead(200, { 'content-type': 'text/event-stream' });
+              response.end(text);
+              receipt({ route: 'compaction', model: payload.model, http_status: 200, completed: true,
+                retained_items: pruned.length, dropped_items: items.length - pruned.length, ...telemetry() });
+              return;
+            }
+          } catch (error) {
+            // Local compaction is optional: a decision that cannot be made continues as the native
+            // compaction, unless the router already ended the request.
+            if (controller.signal.aborted || response.headersSent) throw error;
+            compactionFallback = compactionReason(error);
+          }
         }
         body = { ...payload, input: plaintextHandoffs(expanded) };
       }
@@ -266,6 +295,7 @@ export async function startPilot(config, deepseekKey, capability, { jevAsker } =
         task_count: Array.isArray(payload.input) ? payload.input.filter(item => item.type === 'agent_message').length : 0,
         tool_results: config.markers.map(marker => Array.isArray(payload.input) && payload.input.some(item => item.type === 'function_call_output' && JSON.stringify(item.output).includes(marker))),
       };
+      if (compactionFallback) entry.compaction_fallback = compactionFallback;
       const contentType = result.headers.get('content-type') || 'application/octet-stream';
       const responseHeaders = { 'content-type': contentType };
       for (const name of ['x-codex-turn-state', 'x-request-id', 'retry-after']) {

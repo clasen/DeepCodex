@@ -17,7 +17,11 @@
     "retain_recent": 6,
     "model": "~typesafe/jev-latest",
     "keep_threshold": 0.5,
-    "max_state_chars": 100000
+    "max_call_chars": 2000,
+    "max_questions": 100,
+    "max_state_chars": 100000,
+    "max_state_tokens": 25000,
+    "max_request_tokens": 30000
   },
   "log_max_bytes": 4194304,
   "startup_timeout_seconds": 10
