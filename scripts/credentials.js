@@ -78,9 +78,23 @@ export function saveCredentials(file, name, secret, options = {}) {
   privateWrite(file, lines.join('\n'), { ...options, temporary });
 }
 
-export async function configureCredentials(file, name, input = process.stdin, output = process.stderr) {
+function savedKey(file, name) {
+  const existing = privateRead(file);
+  return existing?.split(/\r\n|\r|\n/).some(line => new RegExp(`^\\s*(?:export\\s+)?${name}\\s*=`).test(line))
+    ? readEnvKey(file, name) : null;
+}
+
+export async function configureCredentials(file, name, input = process.stdin, output = process.stderr, { environment = process.env } = {}) {
   const currentEnabled = loadPilotConfig(ROOT, file).jev_compaction.enabled === true;
-  const deepseekKey = await readSecret(input, output);
+  const environmentKey = environment[name];
+  const existingKey = environmentKey || savedKey(file, name);
+  const enteredKey = await readSecret(input, output, {
+    label: existingKey
+      ? `DeepSeek API key (hidden; Enter to use ${environmentKey ? 'environment' : 'saved'} key)`
+      : 'DeepSeek API key (hidden)',
+    optional: Boolean(existingKey),
+  });
+  const deepseekKey = enteredKey || existingKey;
   const answer = (await readSecret(input, output,
     { label: `Enable Jev compaction? [${currentEnabled ? 'Y/n' : 'y/N'}]`, optional: true, echo: true })).toLowerCase();
   if (!['', 'y', 'yes', 'n', 'no'].includes(answer)) throw new Error('Answer y or n to enable Jev compaction.');
@@ -89,11 +103,8 @@ export async function configureCredentials(file, name, input = process.stdin, ou
   if (jevEnabled) {
     openrouterKey = await readSecret(input, output,
       { label: 'OpenRouter API key for Jev compaction (Enter to reuse saved key)', optional: true });
-    if (!openrouterKey) {
-      const existing = privateRead(file);
-      const savedOpenrouterKey = existing?.split(/\r\n|\r|\n/).some(line => /^\s*(?:export\s+)?OPENROUTER_API_KEY\s*=/.test(line))
-        ? readEnvKey(file, 'OPENROUTER_API_KEY') : null;
-      if (!savedOpenrouterKey) throw new Error('A saved OpenRouter API key is required to enable Jev compaction.');
+    if (!openrouterKey && !savedKey(file, 'OPENROUTER_API_KEY')) {
+      throw new Error('A saved OpenRouter API key is required to enable Jev compaction.');
     }
   }
   saveCredentials(file, name, deepseekKey);
@@ -104,7 +115,7 @@ export async function configureCredentials(file, name, input = process.stdin, ou
 
 export async function main(args) {
   if (args.length === 2 && ['--help', '-h'].includes(args[1])) {
-    console.log('Usage: deepcodex configure\nEnter the DeepSeek key, choose whether to enable Jev compaction, then enter an OpenRouter key if enabled. Saves private files outside the repository.');
+    console.log('Usage: deepcodex configure\nEnter the DeepSeek key or press Enter to use an environment or saved key. Choose whether to enable Jev compaction, then enter an OpenRouter key if enabled. Saves private files outside the repository.');
     return 0;
   }
   if (args.length !== 1 || args[0] !== 'configure') throw new Error('Usage: deepcodex configure (no key arguments accepted)');

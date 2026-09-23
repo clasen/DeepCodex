@@ -59,7 +59,7 @@ function drainingLaunchd(calls, state, stuck) {
   `;
 }
 
-function fixture(t, healthy, { marketplace = false, bundled = false, incompatible = false, pluginFailure = false, noPluginSupport = false, stopFailure = false, startFailure = false, registrationFailure = false, drainingStop = false, stuckStop = false, stopTimeoutSeconds, instructions, customCodexHome = false, platform = 'darwin', config, jevEnabled } = {}) {
+function fixture(t, healthy, { marketplace = false, bundled = false, incompatible = false, pluginFailure = false, noPluginSupport = false, stopFailure = false, startFailure = false, registrationFailure = false, drainingStop = false, stuckStop = false, stopTimeoutSeconds, instructions, customCodexHome = false, platform = 'darwin', config, jevEnabled, ttyOutput = false } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-install-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, "home & user's");
@@ -155,6 +155,7 @@ function fixture(t, healthy, { marketplace = false, bundled = false, incompatibl
     import fs from 'node:fs';
     import { syncBuiltinESMExports } from 'node:module';
     Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} });
+    if (${ttyOutput}) Object.defineProperty(process.stdout, 'isTTY', { value: true });
     const spawnSync = childProcess.spawnSync;
     childProcess.spawnSync = (command, args, options) => {
       if (command === 'systemctl') {
@@ -424,7 +425,12 @@ macTest('uninstall restores config, removes runtime and service, preserves crede
   fs.writeFileSync(credentials, 'fixture-credential');
   const result = removeInstallation(installed);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).status, 'uninstalled');
+  assert.match(result.stdout, /✓ DeepCodex uninstalled successfully/);
+  assert.match(result.stdout, /local service and router runtime were removed/);
+  assert.match(result.stdout, /Codex settings and global instructions were restored/);
+  assert.match(result.stdout, /saved credentials were preserved/);
+  assert.match(result.stdout, /fully quit and reopen Codex Desktop/);
+  assert.doesNotMatch(result.stdout, /"status"|"restart_desktop_required"|"credentials_preserved"/);
   assert.equal(fs.readFileSync(installed.configPath, 'utf8'), installed.original);
   assert.equal(fs.readFileSync(path.join(installed.home, '.codex/AGENTS.md'), 'utf8'), '');
   assert.equal(fs.readFileSync(credentials, 'utf8'), 'fixture-credential');
@@ -439,13 +445,53 @@ macTest('uninstall restores config, removes runtime and service, preserves crede
   assert.equal(JSON.parse(repeated.stdout).status, 'not_installed');
 });
 
-macTest('uninstall refuses changed config before stopping the service or deleting files', t => {
+macTest('uninstall preserves unrelated config edits made after installation', t => {
   const installed = fixture(t, true);
-  const changed = fs.readFileSync(installed.configPath, 'utf8') + '\n# New user setting\n';
+  const unrelated = '# New user setting\n';
+  const configured = fs.readFileSync(installed.configPath, 'utf8')
+    .replace('model="gpt-6-astra"', 'model="gpt-6-sol"')
+    .replace('multi_agent = true', 'custom_feature = true\nmulti_agent = true') + '\n' + unrelated;
+  fs.writeFileSync(installed.configPath, configured);
+  const reinstalled = installed.run();
+  assert.equal(reinstalled.status, 0, reinstalled.stderr);
+  const result = removeInstallation(installed);
+  assert.equal(result.status, 0, result.stderr);
+  const restored = fs.readFileSync(installed.configPath, 'utf8');
+  assert.equal(parseToml(restored).model, 'gpt-6-sol');
+  assert.equal(parseToml(restored).model_provider, undefined);
+  assert.equal(parseToml(restored).features.custom_feature, true);
+  assert.match(restored, /# New user setting/);
+  assert.equal(fs.existsSync(path.join(installed.home, '.local/share/deepcodex/runtime')), false);
+});
+
+macTest('uninstall accepts a comment appended to the managed plugin section', t => {
+  const installed = fixture(t, true);
+  assert.equal(installed.result.status, 0, installed.result.stderr);
+  fs.appendFileSync(installed.configPath, '\n# Later note\n');
+  const result = removeInstallation(installed);
+  assert.equal(result.status, 0, result.stderr);
+  const restored = fs.readFileSync(installed.configPath, 'utf8');
+  assert.match(restored, /# Later note/);
+  assert.doesNotMatch(restored, /\[plugins\."deepcodex@personal"\]/);
+  assert.doesNotMatch(restored, /\[model_providers\.deepcodex\]/);
+});
+
+macTest('uninstall marks success red on a terminal', t => {
+  const installed = fixture(t, true, { ttyOutput: true });
+  assert.equal(installed.result.status, 0, installed.result.stderr);
+  assert.match(installed.result.stdout, /\x1b\[32m✓\x1b\[0m DeepCodex installed successfully/);
+  const result = removeInstallation(installed);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /\x1b\[31m✓\x1b\[0m DeepCodex uninstalled successfully/);
+});
+
+macTest('uninstall refuses conflicting changes to managed config before stopping the service', t => {
+  const installed = fixture(t, true);
+  const changed = fs.readFileSync(installed.configPath, 'utf8').replace('model_provider = "deepcodex"', 'model_provider = "custom"');
   fs.writeFileSync(installed.configPath, changed);
   const result = removeInstallation(installed);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /configuration changed/);
+  assert.match(result.stderr, /managed setting changed/);
   assert.equal(fs.readFileSync(installed.configPath, 'utf8'), changed);
   assert.equal(fs.existsSync(path.join(installed.home, '.local/share/deepcodex/runtime')), true);
   const calls = fs.readFileSync(path.join(path.dirname(installed.home), 'launchctl.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);

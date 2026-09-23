@@ -19,6 +19,7 @@ const STATE = path.join(os.homedir(), '.config/deepcodex/desktop');
 const LSREGISTER = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
 const readJson = filename => JSON.parse(fs.readFileSync(filename, 'utf8'));
 const expandHome = filename => filename.startsWith('~/') ? path.join(os.homedir(), filename.slice(2)) : filename;
+const successMark = color => process.stdout.isTTY && !('NO_COLOR' in process.env) ? `\x1b[${color}m✓\x1b[0m` : '✓';
 
 export function mergeAgentInstructions(text, { remove = false } = {}) {
   const start = '<!-- DEEPCODEX_START -->';
@@ -85,6 +86,129 @@ export function mergeConfig(text, sections) {
   const result = lines.join('');
   if (!isDeepStrictEqual(parseToml(result), expected)) throw new Error('Configuration merge changed unrelated settings');
   return result;
+}
+
+const managedConfigFields = [
+  [[], ['model_provider', 'model_catalog_json']],
+  [['agents'], ['enabled', 'default_subagent_model', 'default_subagent_reasoning_effort']],
+  [['features'], ['multi_agent', 'multi_agent_v2']],
+  [['model_providers', 'deepcodex'], ['name', 'base_url', 'wire_api', 'requires_openai_auth',
+    'supports_websockets', 'request_max_retries', 'stream_max_retries', 'stream_idle_timeout_ms']],
+  [['model_providers', 'deepcodex', 'http_headers'], ['x-deepcodex-pilot']],
+];
+
+function configValue(config, path) {
+  let value = config;
+  for (const key of path) {
+    if (!value || !Object.hasOwn(value, key)) return { exists: false };
+    value = value[key];
+  }
+  return { exists: true, value };
+}
+
+function configBlocks(text) {
+  const lines = text.match(/[^\n]*\n|[^\n]+$/g) || [];
+  const blocks = [{ section: [], lines: [] }];
+  for (const line of lines) {
+    if (/^\s*\[(?!\[).+\]\s*(?:#.*)?$/.test(line)) {
+      const table = parseToml(line);
+      const section = [];
+      let node = table;
+      while (node && typeof node === 'object' && !Array.isArray(node) && Object.keys(node).length === 1) {
+        const key = Object.keys(node)[0];
+        section.push(key);
+        node = node[key];
+      }
+      blocks.push({ section, lines: [line] });
+    } else blocks.at(-1).lines.push(line);
+  }
+  return blocks;
+}
+
+function assignment(block, key) {
+  if (!block) return -1;
+  const matches = block.lines.flatMap((line, index) =>
+    line.trimStart().startsWith(key) && /^\s*=/.test(line.trimStart().slice(key.length)) ? [index] : []);
+  if (matches.length > 1) throw new Error('Duplicate managed configuration field');
+  return matches[0] ?? -1;
+}
+
+export function restoreConfig(current, before, proposed) {
+  if (current === before) return current;
+  const previous = parseToml(before);
+  const installed = parseToml(proposed);
+  const active = parseToml(current);
+  const pluginFields = Object.keys(installed.plugins || {})
+    .filter(key => key.startsWith('deepcodex@'))
+    .map(key => [['plugins', key], ['enabled']]);
+  const fields = [...managedConfigFields, ...pluginFields];
+  const currentBlocks = configBlocks(current);
+  const beforeBlocks = configBlocks(before);
+  const blockFor = (blocks, section) => blocks.find(block => isDeepStrictEqual(block.section, section));
+  for (const [section, keys] of fields) {
+    for (const key of keys) {
+      const path = [...section, key];
+      const oldValue = configValue(previous, path);
+      const installedValue = configValue(installed, path);
+      if (isDeepStrictEqual(oldValue, installedValue)) continue;
+      const activeValue = configValue(active, path);
+      if (isDeepStrictEqual(activeValue, oldValue)) continue;
+      if (!isDeepStrictEqual(activeValue, installedValue)) {
+        throw new Error(`Codex managed setting changed after installation: ${path.join('.')}; uninstall stopped without changes`);
+      }
+      const block = blockFor(currentBlocks, section);
+      const index = assignment(block, key);
+      if (index < 0) throw new Error(`Cannot locate managed setting ${path.join('.')} in config.toml`);
+      if (oldValue.exists) {
+        const oldBlock = blockFor(beforeBlocks, section);
+        const oldIndex = assignment(oldBlock, key);
+        if (oldIndex < 0) throw new Error(`Cannot locate original setting ${path.join('.')} in config.before.toml`);
+        block.lines[index] = oldBlock.lines[oldIndex];
+      } else block.lines.splice(index, 1);
+    }
+  }
+  const restored = currentBlocks.map(block => {
+    if (block.section.length === 0 || blockFor(beforeBlocks, block.section) ||
+        block.lines.slice(1).some(line => line.trim() && !line.trimStart().startsWith('#'))) {
+      return block.lines.join('');
+    }
+    return block.lines.slice(1).join('');
+  }).join('');
+  const result = parseToml(restored);
+  for (const [section, keys] of fields) {
+    for (const key of keys) {
+      const path = [...section, key];
+      const expected = isDeepStrictEqual(configValue(previous, path), configValue(installed, path))
+        ? configValue(active, path) : configValue(previous, path);
+      if (!isDeepStrictEqual(configValue(result, path), expected)) {
+        throw new Error('Cannot restore managed Codex configuration');
+      }
+    }
+  }
+  const withoutManaged = config => {
+    const copy = structuredClone(config);
+    for (const [section, keys] of fields) {
+      for (const key of keys) {
+        const parents = [copy];
+        for (const part of section) {
+          const child = parents.at(-1)?.[part];
+          if (!child || typeof child !== 'object') break;
+          parents.push(child);
+        }
+        if (parents.length !== section.length + 1) continue;
+        delete parents.at(-1)[key];
+        for (let index = section.length; index > 0; index--) {
+          if (Object.keys(parents[index]).length) break;
+          delete parents[index - 1][section[index - 1]];
+        }
+      }
+    }
+    return copy;
+  };
+  if (!isDeepStrictEqual(withoutManaged(result), withoutManaged(active))) {
+    throw new Error('Configuration restoration changed unrelated settings');
+  }
+  return restored.trimEnd() === before.trimEnd() ? before : restored;
 }
 
 function xml(value) {
@@ -307,7 +431,7 @@ export async function install() {
   privateWrite(configPath, updated);
   console.log([
     '',
-    `  ${process.stdout.isTTY && !('NO_COLOR' in process.env) ? '\x1b[32m✓\x1b[0m' : '✓'} DeepCodex installed successfully`,
+    `  ${successMark(32)} DeepCodex installed successfully`,
     '',
     '  The local service is running and the Codex plugin is installed.',
     '  DeepSeek Flash is configured for delegated tasks.',
@@ -339,9 +463,7 @@ export function uninstall() {
   const before = fs.readFileSync(path.join(STATE, 'config.before.toml'), 'utf8');
   const proposed = fs.readFileSync(path.join(STATE, 'config.proposed.toml'), 'utf8');
   const current = fs.readFileSync(configPath, 'utf8');
-  if (current !== proposed && current !== before) {
-    throw new Error('Codex configuration changed after installation; uninstall stopped without changes. Reconcile config.toml with the backup and proposed config in ' + STATE);
-  }
+  const restored = restoreConfig(current, before, proposed);
   const instructionsPath = path.join(path.dirname(configPath), 'AGENTS.md');
   mergeAgentInstructions(fs.existsSync(instructionsPath) ? fs.readFileSync(instructionsPath, 'utf8') : '', { remove: true });
   const runtime = path.join(os.homedir(), '.local/share/deepcodex/runtime');
@@ -349,7 +471,7 @@ export function uninstall() {
   const label = readJson(path.join(ROOT, 'config/desktop.json')).service_label;
   if (state.config.service_label !== label) throw new Error('Unexpected router service label; uninstall stopped');
   // Restore connectivity before stopping the router; a failed stop can be retried.
-  if (current !== before) privateWrite(configPath, before);
+  if (current !== restored) privateWrite(configPath, restored);
   stopService(state);
   updateAgentInstructions(configPath, { remove: true });
   if (process.platform === 'darwin') {
@@ -359,7 +481,17 @@ export function uninstall() {
   } else userService('remove', state);
   fs.rmSync(runtime, { recursive: true, force: true });
   fs.rmSync(STATE, { recursive: true, force: true });
-  console.log(JSON.stringify({ status: 'uninstalled', restart_desktop_required: true, credentials_preserved: true }));
+  console.log([
+    '',
+    `  ${successMark(31)} DeepCodex uninstalled successfully`,
+    '',
+    '  The local service and router runtime were removed.',
+    '  Codex settings and global instructions were restored.',
+    '  Your saved credentials were preserved.',
+    '',
+    '  Next: fully quit and reopen Codex Desktop.',
+    '',
+  ].join('\n'));
 }
 
 export async function main(args = process.argv.slice(2)) {

@@ -66,9 +66,11 @@ shell, PowerShell or Command Prompt, from any directory.
 deepcodex configure
 ```
 
-When prompted, paste the DeepSeek API key from step 2 and press Enter. The input
-is hidden. DeepCodex saves the key in `~/.config/deepcodex/.env` for the router
-to use; you do not need to edit a configuration file. Next, choose whether to
+When prompted, paste the DeepSeek API key from step 2 and press Enter. If
+`DEEPSEEK_API_KEY` is already in the environment, or DeepCodex has a saved key,
+press Enter to use it. The input is hidden. DeepCodex saves the key in
+`~/.config/deepcodex/.env` for the router to use; you do not need to edit a
+configuration file. Next, choose whether to
 enable Jev compaction. It defaults to off on first setup; pressing Enter on a
 later run keeps the previous choice. If enabled, the final prompt asks for an
 OpenRouter API key. Enter a key or press Enter to reuse a previously saved one.
@@ -128,6 +130,8 @@ must be on your `PATH`. In paths below, `~` means your home directory
 ### Credential storage
 
 `configure` asks for the DeepSeek API key, then whether to enable Jev compaction.
+Press Enter to use `DEEPSEEK_API_KEY` from the environment, or a previously
+saved DeepCodex key if the environment variable is absent. The key is never echoed.
 Only when enabled does it ask for an OpenRouter API key. Press Enter at the
 OpenRouter prompt to reuse a saved key. Disabling Jev preserves that key. Both
 keys are stored in `~/.config/deepcodex/.env`. It creates the directory with mode
@@ -221,7 +225,7 @@ has not changed. Other personal marketplace entries are preserved.
 | `deepcodex configure` | Save the DeepSeek key, choose whether to enable Jev compaction, and enter an OpenRouter key if enabled. |
 | `deepcodex doctor` | Check Codex CLI compatibility and credential presence without inference. |
 | `deepcodex install` | Install the router runtime, user service, Codex settings and current DeepCodex plugin. |
-| `deepcodex uninstall` | Stop and remove the router, restoring the saved Codex configuration. Credentials are preserved. Refuses if config changed since installation. Restart Codex afterward; remove the npm package separately with `npm uninstall -g deepcodex`. |
+| `deepcodex uninstall` | Stop and remove the router, restoring DeepCodex-managed Codex settings while preserving unrelated config edits. Credentials are preserved. Refuses if a managed setting conflicts with the installed value. Restart Codex afterward; remove the npm package separately with `npm uninstall -g deepcodex`. |
 | `deepcodex status` | Query the installed router health endpoint without inference. |
 | `deepcodex run --cwd PATH --task-file PATH [--write]` | Run one bounded isolated worker ticket against DeepSeek. Read-only unless `--write` is given. |
 | `deepcodex pilot` | Run the opt-in live native-delegation test; consumes Codex and DeepSeek usage. |

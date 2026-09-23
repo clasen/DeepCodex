@@ -140,6 +140,35 @@ test('configure accepts no OpenRouter key on first setup', async t => {
   assert.equal(loadPilotConfig(ROOT, file).jev_compaction.enabled, false);
 });
 
+test('configure uses the environment DeepSeek key on Enter without echoing it', async t => {
+  const file = path.join(fixture(t), 'credentials/.env');
+  saveCredentials(file, NAME, 'fixture-old');
+  const tty = terminal(['\r', '\r']);
+  await configureCredentials(file, NAME, tty.input, tty.output,
+    { environment: { [NAME]: 'fixture-environment' } });
+  assert.equal(readEnvKey(file, NAME), 'fixture-environment');
+  assert.match(tty.text(), /Enter to use environment key/);
+  assert.doesNotMatch(tty.text(), /fixture-environment|fixture-old/);
+});
+
+test('configure reuses its saved DeepSeek key on Enter', async t => {
+  const file = path.join(fixture(t), 'credentials/.env');
+  saveCredentials(file, NAME, 'fixture-saved');
+  const tty = terminal(['\r', '\r']);
+  await configureCredentials(file, NAME, tty.input, tty.output, { environment: {} });
+  assert.equal(readEnvKey(file, NAME), 'fixture-saved');
+  assert.match(tty.text(), /Enter to use saved key/);
+  assert.doesNotMatch(tty.text(), /fixture-saved/);
+});
+
+test('configure still requires DeepSeek entry when no key is available', async t => {
+  const file = path.join(fixture(t), 'credentials/.env');
+  const tty = terminal(['\r']);
+  await assert.rejects(configureCredentials(file, NAME, tty.input, tty.output, { environment: {} }),
+    /key cannot be empty/);
+  assert.equal(fs.existsSync(file), false);
+});
+
 test('cancelling at the activation prompt leaves saved credentials unchanged', async t => {
   const file = path.join(fixture(t), 'credentials/.env');
   saveCredentials(file, NAME, 'fixture-existing');
