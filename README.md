@@ -68,7 +68,10 @@ deepcodex configure
 
 When prompted, paste the DeepSeek API key from step 2 and press Enter. The input
 is hidden. DeepCodex saves the key in `~/.config/deepcodex/.env` for the router
-to use; you do not need to edit a configuration file.
+to use; you do not need to edit a configuration file. Next, choose whether to
+enable Jev compaction. It defaults to off on first setup; pressing Enter on a
+later run keeps the previous choice. If enabled, the final prompt asks for an
+OpenRouter API key. Enter a key or press Enter to reuse a previously saved one.
 
 ### 5. Activate DeepCodex
 
@@ -124,15 +127,23 @@ must be on your `PATH`. In paths below, `~` means your home directory
 
 ### Credential storage
 
-`configure` asks for the DeepSeek API key with hidden input on the terminal and
-stores it in `~/.config/deepcodex/.env`. It creates the directory with mode
+`configure` asks for the DeepSeek API key, then whether to enable Jev compaction.
+Only when enabled does it ask for an OpenRouter API key. Press Enter at the
+OpenRouter prompt to reuse a saved key. Disabling Jev preserves that key. Both
+keys are stored in `~/.config/deepcodex/.env`. It creates the directory with mode
 `0700` and the file with mode `0600` on macOS/Linux. On Windows it uses an
-owner-only ACL. The key is stored as plaintext in that file.
+owner-only ACL. The keys are stored as plaintext in that file.
+
+The final prompt controls Jev compaction. The choice is stored in
+`~/.config/deepcodex/settings.json` with the same private permissions. `configure`
+does not start or restart the router; run `deepcodex install` to apply the choice
+to the installed service. When enabled, compaction sends conversation history,
+including tool calls and results, to OpenRouter for Jev decisions.
 
 The command does not accept a key argument or piped input, keeping the key out
 of shell history and process arguments. Press Ctrl-C to cancel without changing
-the saved key. Re-running `configure` replaces the key while preserving other
-variables in the file. Run `install` again to reload an already running router.
+the saved keys. Re-running `configure` replaces the entered keys while preserving
+other variables in the file. Run `install` again to reload an already running router.
 
 `config/worker.json` defines the credential file location. `doctor` and `run`
 prefer `DEEPSEEK_API_KEY` from their environment when set; otherwise they read
@@ -207,7 +218,7 @@ has not changed. Other personal marketplace entries are preserved.
 
 | Command | Purpose |
 | --- | --- |
-| `deepcodex configure` | Prompt for the DeepSeek API key and write `~/.config/deepcodex/.env`. |
+| `deepcodex configure` | Save the DeepSeek key, choose whether to enable Jev compaction, and enter an OpenRouter key if enabled. |
 | `deepcodex doctor` | Check Codex CLI compatibility and credential presence without inference. |
 | `deepcodex install` | Install the router runtime, user service, Codex settings and current DeepCodex plugin. |
 | `deepcodex uninstall` | Stop and remove the router, restoring the saved Codex configuration. Credentials are preserved. Refuses if config changed since installation. Restart Codex afterward; remove the npm package separately with `npm uninstall -g deepcodex`. |

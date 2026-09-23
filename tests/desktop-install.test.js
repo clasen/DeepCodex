@@ -59,10 +59,16 @@ function drainingLaunchd(calls, state, stuck) {
   `;
 }
 
-function fixture(t, healthy, { marketplace = false, bundled = false, incompatible = false, pluginFailure = false, noPluginSupport = false, stopFailure = false, startFailure = false, registrationFailure = false, drainingStop = false, stuckStop = false, stopTimeoutSeconds, instructions, customCodexHome = false, platform = 'darwin', config } = {}) {
+function fixture(t, healthy, { marketplace = false, bundled = false, incompatible = false, pluginFailure = false, noPluginSupport = false, stopFailure = false, startFailure = false, registrationFailure = false, drainingStop = false, stuckStop = false, stopTimeoutSeconds, instructions, customCodexHome = false, platform = 'darwin', config, jevEnabled } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'deepcodex-install-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, "home & user's");
+  if (jevEnabled !== undefined) {
+    const settingsDir = path.join(home, '.config/deepcodex');
+    fs.mkdirSync(settingsDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(settingsDir, 'settings.json'),
+      JSON.stringify({ jev_compaction: { enabled: jevEnabled } }), { mode: 0o600 });
+  }
   const source = path.join(root, 'source');
   const bin = path.join(root, 'bin');
   const codexHome = path.join(home, customCodexHome ? 'custom-codex' : '.codex');
@@ -190,6 +196,13 @@ test('installation preserves the current native catalog and refreshes it on rein
   const repeated = installed.run();
   assert.equal(repeated.status, 0, repeated.stderr);
   verify(updated);
+});
+
+test('installation applies the saved Jev compaction choice', t => {
+  const installed = fixture(t, true, { platform: 'linux', jevEnabled: true });
+  assert.equal(installed.result.status, 0, installed.result.stderr);
+  const state = JSON.parse(fs.readFileSync(path.join(installed.home, '.config/deepcodex/desktop/state.json')));
+  assert.equal(state.config.jev_compaction.enabled, true);
 });
 
 macTest('installation associates the LaunchAgent with a branded app that runs the copied runtime', t => {

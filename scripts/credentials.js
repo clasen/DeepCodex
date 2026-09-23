@@ -2,10 +2,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { emitKeypressEvents } from 'node:readline';
-import { loadConfig } from './worker.js';
+import { ROOT, loadConfig, readEnvKey } from './worker.js';
 import { ensurePrivateDirectory, privateRead, privateWrite } from './private-files.js';
+import { loadPilotConfig, saveJevCompactionEnabled } from './pilot-config.js';
 
-export function readSecret(input = process.stdin, output = process.stderr) {
+export function readSecret(input = process.stdin, output = process.stderr, { label = 'DeepSeek API key (hidden)', optional = false, echo = false } = {}) {
   if (!input.isTTY || !output.isTTY) throw new Error('Configure requires an interactive terminal; do not pass the key as an argument.');
   return new Promise((resolve, reject) => {
     let secret = '';
@@ -26,12 +27,16 @@ export function readSecret(input = process.stdin, output = process.stderr) {
     const onKey = (text, key = {}) => {
       if ((key.ctrl && ['c', 'd'].includes(key.name)) || key.name === 'escape') return onEnd();
       if (key.name === 'return' || key.name === 'enter') {
-        return finish(secret ? null : new Error('The key cannot be empty.'));
+        return finish(secret || optional ? null : new Error('The key cannot be empty.'));
       }
-      if (key.name === 'backspace') secret = secret.slice(0, -1);
+      if (key.name === 'backspace') {
+        if (echo && secret) output.write('\b \b');
+        secret = secret.slice(0, -1);
+      }
       else if (text && !key.ctrl && !key.meta) {
         if (!/^[\x21-\x7e]+$/.test(text)) return finish(new Error('The key must contain only printable characters without spaces.'));
         secret += text;
+        if (echo) output.write(text);
       }
     };
     emitKeypressEvents(input);
@@ -39,7 +44,7 @@ export function readSecret(input = process.stdin, output = process.stderr) {
     input.on('keypress', onKey);
     input.once('end', onEnd);
     input.once('error', onError);
-    output.write('DeepSeek API key (hidden): ');
+    output.write(`${label}: `);
     input.resume();
   });
 }
@@ -73,9 +78,33 @@ export function saveCredentials(file, name, secret, options = {}) {
   privateWrite(file, lines.join('\n'), { ...options, temporary });
 }
 
+export async function configureCredentials(file, name, input = process.stdin, output = process.stderr) {
+  const currentEnabled = loadPilotConfig(ROOT, file).jev_compaction.enabled === true;
+  const deepseekKey = await readSecret(input, output);
+  const answer = (await readSecret(input, output,
+    { label: `Enable Jev compaction? [${currentEnabled ? 'Y/n' : 'y/N'}]`, optional: true, echo: true })).toLowerCase();
+  if (!['', 'y', 'yes', 'n', 'no'].includes(answer)) throw new Error('Answer y or n to enable Jev compaction.');
+  const jevEnabled = answer === '' ? currentEnabled : ['y', 'yes'].includes(answer);
+  let openrouterKey = '';
+  if (jevEnabled) {
+    openrouterKey = await readSecret(input, output,
+      { label: 'OpenRouter API key for Jev compaction (Enter to reuse saved key)', optional: true });
+    if (!openrouterKey) {
+      const existing = privateRead(file);
+      const savedOpenrouterKey = existing?.split(/\r\n|\r|\n/).some(line => /^\s*(?:export\s+)?OPENROUTER_API_KEY\s*=/.test(line))
+        ? readEnvKey(file, 'OPENROUTER_API_KEY') : null;
+      if (!savedOpenrouterKey) throw new Error('A saved OpenRouter API key is required to enable Jev compaction.');
+    }
+  }
+  saveCredentials(file, name, deepseekKey);
+  if (openrouterKey) saveCredentials(file, 'OPENROUTER_API_KEY', openrouterKey);
+  saveJevCompactionEnabled(file, jevEnabled);
+  return { openrouterSaved: Boolean(openrouterKey), jevEnabled };
+}
+
 export async function main(args) {
   if (args.length === 2 && ['--help', '-h'].includes(args[1])) {
-    console.log('Usage: deepcodex configure\nEnter the DeepSeek key in a hidden terminal prompt. Saves a private plaintext file outside the repository.');
+    console.log('Usage: deepcodex configure\nEnter the DeepSeek key, choose whether to enable Jev compaction, then enter an OpenRouter key if enabled. Saves private files outside the repository.');
     return 0;
   }
   if (args.length !== 1 || args[0] !== 'configure') throw new Error('Usage: deepcodex configure (no key arguments accepted)');
@@ -83,8 +112,7 @@ export async function main(args) {
   const name = config.codex.model_providers[config.codex.model_provider].env_key;
   const configured = config.credentials.env_file;
   const file = configured.startsWith('~/') ? path.join(os.homedir(), configured.slice(2)) : configured;
-  const secret = await readSecret();
-  saveCredentials(file, name, secret);
-  console.log('DeepSeek key saved with owner-only permissions. Run deepcodex install to activate it or reload an existing router.');
+  const { openrouterSaved, jevEnabled } = await configureCredentials(file, name);
+  console.log(`${openrouterSaved ? 'DeepSeek and OpenRouter keys' : 'DeepSeek key'} saved with owner-only permissions. Jev compaction ${jevEnabled ? 'enabled' : 'disabled'}. Run deepcodex install to apply the setting or reload an existing router.`);
   return 0;
 }

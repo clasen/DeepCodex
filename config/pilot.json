@@ -11,6 +11,14 @@
   "port": 0,
   "relay_cache_entries": 128,
   "relay_cache_ttl_ms": 900000,
+  "jev_compaction": {
+    "enabled": false,
+    "store": "deepcodex-compaction",
+    "retain_recent": 6,
+    "model": "~typesafe/jev-latest",
+    "keep_threshold": 0.5,
+    "max_state_chars": 100000
+  },
   "log_max_bytes": 4194304,
   "startup_timeout_seconds": 10
 }

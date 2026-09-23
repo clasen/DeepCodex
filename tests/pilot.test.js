@@ -10,6 +10,7 @@ import { assess, authFile, execArgs, run } from '../scripts/pilot.js';
 const PILOT = fileURLToPath(new URL('../scripts/pilot.js', import.meta.url));
 const PLATFORM = fileURLToPath(new URL('../scripts/platform.js', import.meta.url));
 const PRIVATE_FILES = fileURLToPath(new URL('../scripts/private-files.js', import.meta.url));
+const PILOT_CONFIG = fileURLToPath(new URL('../scripts/pilot-config.js', import.meta.url));
 const markers = ['first', 'second'];
 
 // The harness fixtures are POSIX shebang scripts and the cleanup assertions rely on POSIX process
@@ -77,11 +78,12 @@ const RUNNER = [
 const WORKER_STUB = (root, codex, { failKill = false } = {}) => [
   `export const ROOT = ${JSON.stringify(root)};`,
   'export function loadConfig() {',
-  "  return { codex: { model: 'deepseek-flash', model_provider: 'deepcodex-deepseek', model_reasoning_effort: 'high',",
+  `  return { credentials: { env_file: ${JSON.stringify(path.join(root, 'credentials/.env'))} }, codex: { model: 'deepseek-flash', model_provider: 'deepcodex-deepseek', model_reasoning_effort: 'high',`,
   '      features: { multi_agent: false, plugins: false },',
   "      model_providers: { 'deepcodex-deepseek': { base_url: 'https://api.deepseek.com', env_key: 'DEEPSEEK_API_KEY' } } },",
   "    model_metadata: { display_name: 'DeepSeek Flash (DeepCodex)' } };",
   '}',
+  "export function expandUser(file) { return file; }",
   'export function workerEnvironment(source) { return { ...source }; }',
   "export function loadCredentials(env, config) { env.DEEPSEEK_API_KEY = 'fake-test-key'; }",
   `export function doctor(config, env) { return { status: 'ready', codex: ${JSON.stringify(codex)} }; }`,
@@ -121,6 +123,7 @@ function harness(t, { mode = 'complete', auth = true, vanish = false, failKill =
   fs.copyFileSync(PILOT, path.join(root, 'scripts/pilot.js'));
   fs.copyFileSync(PLATFORM, path.join(root, 'scripts/platform.js'));
   fs.copyFileSync(PRIVATE_FILES, path.join(root, 'scripts/private-files.js'));
+  fs.copyFileSync(PILOT_CONFIG, path.join(root, 'scripts/pilot-config.js'));
   fs.writeFileSync(path.join(root, 'scripts/worker.js'), WORKER_STUB(root, box.codex, { failKill }));
   fs.writeFileSync(path.join(root, 'scripts/pilot-router.js'), FAKE_ROUTER);
   fs.writeFileSync(path.join(root, 'runner.js'), RUNNER);

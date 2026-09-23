@@ -6,7 +6,7 @@ const command = args.shift();
 const help = `Usage: deepcodex <command>
 
 Commands:
-  configure  Save the DeepSeek key using a hidden terminal prompt
+  configure  Save API keys and choose whether to enable Jev compaction
   install  Activate the local router and install the Codex plugin
   uninstall  Remove the local router and restore Codex settings
   status   Check the installed router without inference
@@ -15,7 +15,7 @@ Commands:
   pilot    Test native delegation (consumes Codex and DeepSeek usage)
 
 Requires Node.js >=22.15 and a compatible Codex CLI (PATH or Desktop bundle).
-Run deepcodex configure to save the DeepSeek key in ~/.config/deepcodex/.env.
+Run deepcodex configure to save API keys in ~/.config/deepcodex/.env.
 Run deepcodex install after installing this npm package to activate the router
 and install or update the DeepCodex plugin, including its icon and skill.
 Use deepcodex <command> --help for command options.

@@ -506,7 +506,7 @@ function homeDirectory() {
   return process.platform === 'win32' ? os.homedir() : process.env.HOME ?? os.homedir();
 }
 
-function expandUser(file) {
+export function expandUser(file) {
   if (file === '~') return homeDirectory();
   if (file.startsWith('~/')) return path.join(homeDirectory(), file.slice(2));
   return file;

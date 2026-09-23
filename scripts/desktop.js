@@ -9,6 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { ROOT, loadConfig, workerEnvironment, loadCredentials, doctor } from './worker.js';
 import { parseToml } from './toml.js';
 import { startPilot } from './pilot-router.js';
+import { loadPilotConfig } from './pilot-config.js';
 import { userService } from './service.js';
 import { ensurePrivateDirectory, privateWrite } from './private-files.js';
 import { spawnPlan } from './platform.js';
@@ -209,7 +210,7 @@ export async function health(state) {
 
 export async function install() {
   if (!['darwin', 'linux', 'win32'].includes(process.platform)) throw new Error('DeepCodex supports macOS, Linux and Windows');
-  const config = { ...readJson(path.join(ROOT, 'config/pilot.json')), ...readJson(path.join(ROOT, 'config/desktop.json')) };
+  const config = { ...loadPilotConfig(), ...readJson(path.join(ROOT, 'config/desktop.json')) };
   const original = loadConfig();
   const provider = original.codex.model_providers[original.codex.model_provider];
   const env = workerEnvironment(process.env);

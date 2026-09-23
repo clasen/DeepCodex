@@ -8,6 +8,10 @@ import { zstdDecompressSync } from 'node:zlib';
 import { deepSeekCustomToolNames, deepSeekResponsesEffort, deepSeekResponsesInput } from '../vendor/codex-router/deepseek-responses.js';
 import { bridgeCustomTools, flattenNamespaceTools, flattenNamespacedHistory, flattenToolChoice,
   NamespaceToolCallTransform } from '../vendor/codex-router/namespace-relay.js';
+import { compactionDirectory, compactionRequest, createStore, estimateTokens, expandReferences,
+  referenceText, selectHistory, stripCompactionInstruction } from './compaction.js';
+import { createJevAsker } from './jev-openrouter.js';
+import { expandUser, loadConfig, readEnvKey } from './worker.js';
 
 // Relay adaptation: codex-router/src/router.mjs at 63ec1f3602c28f2a28ccb7e9edaf7b4f7d191c6c.
 // Copyright (c) 2026 codex-router contributors; see ../vendor/codex-router/LICENSE.
@@ -88,8 +92,29 @@ export function prepareDeepseek(payload, input) {
   };
 }
 
-export async function startPilot(config, deepseekKey, capability) {
+// The client accepts the local reference where it expects a compaction summary and stores it
+// in the compacted history, which is what lets a later request be expanded from the store.
+function compactionStream(model, reference, inputTokens) {
+  const item = { id: `msg_deepcodex_compaction_${randomUUID()}`, type: 'message', role: 'assistant',
+    status: 'completed', content: [{ type: 'output_text', text: reference, annotations: [] }] };
+  const response = { id: `resp_deepcodex_compaction_${randomUUID()}`, object: 'response',
+    created_at: Math.floor(Date.now() / 1000), model, status: 'completed', output: [item],
+    usage: { input_tokens: inputTokens, output_tokens: 0, total_tokens: inputTokens } };
+  return [
+    { type: 'response.created', response: { ...response, status: 'in_progress', output: [] } },
+    { type: 'response.output_item.added', output_index: 0, item },
+    { type: 'response.output_item.done', output_index: 0, item },
+    { type: 'response.completed', response },
+  ].map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
+}
+
+export async function startPilot(config, deepseekKey, capability, { jevAsker } = {}) {
+  jevAsker ??= async input => {
+    const key = process.env.OPENROUTER_API_KEY || readEnvKey(expandUser(loadConfig().credentials.env_file), 'OPENROUTER_API_KEY');
+    return createJevAsker(config, key)(input);
+  };
   const relayCache = new Map();
+  const store = config.jev_compaction ? createStore(compactionDirectory(config)) : null;
   let requestCount = 0;
   const receipt = entry => {
     if (existsSync(config.receipts) && statSync(config.receipts).size >= config.log_max_bytes) {
@@ -209,7 +234,25 @@ export async function startPilot(config, deepseekKey, capability) {
         const prepared = prepareDeepseek(payload, input);
         body = prepared.payload;
         namespaces = prepared.namespaces;
-      } else body = { ...payload, input: plaintextHandoffs(payload.input) };
+      } else {
+        // A stored reference is expanded even when the option is off, so a session that
+        // already depends on a pruned history can continue after new compactions stop.
+        const expanded = Array.isArray(payload.input) ? expandReferences(payload.input, store) : payload.input;
+        if (config.jev_compaction?.enabled === true && Array.isArray(expanded)
+          && compactionRequest(request.headers['x-codex-turn-metadata'])) {
+          route = 'compaction';
+          const items = stripCompactionInstruction(expanded);
+          const pruned = await selectHistory(items, { asker: jevAsker, retainRecent: config.jev_compaction.retain_recent });
+          const text = compactionStream(payload.model, referenceText(store.save(pruned)), estimateTokens(pruned));
+          bytesSent = Buffer.byteLength(text);
+          response.writeHead(200, { 'content-type': 'text/event-stream' });
+          response.end(text);
+          receipt({ route: 'compaction', model: payload.model, http_status: 200, completed: true,
+            retained_items: pruned.length, dropped_items: items.length - pruned.length, ...telemetry() });
+          return;
+        }
+        body = { ...payload, input: plaintextHandoffs(expanded) };
+      }
       const nativeUrl = config.native_url.replace(/\/responses$/, '') + path;
       phase = 'upstream';
       route = isChild ? 'deepseek' : 'native';

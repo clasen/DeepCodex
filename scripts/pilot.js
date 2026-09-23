@@ -8,6 +8,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnPlan } from './platform.js';
 import { ensurePrivateDirectory, privateWrite } from './private-files.js';
+import { loadPilotConfig } from './pilot-config.js';
 import { ROOT, configArgs, doctor, killGroup, loadConfig, loadCredentials, workerEnvironment } from './worker.js';
 
 export function assess(receipts, markers, returncode, events) {
@@ -118,7 +119,7 @@ function waitForExit(child, timeout_ms, signal) {
 }
 
 export async function run() {
-  const config = JSON.parse(readFileSync(path.join(ROOT, 'config/pilot.json'), 'utf8'));
+  const config = loadPilotConfig();
   const workerConfig = loadConfig();
   const sourceEnv = workerEnvironment(process.env);
   loadCredentials(sourceEnv, workerConfig);
