@@ -67,6 +67,11 @@ function fixture(t, healthy, { marketplace = false, bundled = false, incompatibl
   const bin = path.join(root, 'bin');
   const codexHome = path.join(home, customCodexHome ? 'custom-codex' : '.codex');
   fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, 'models_cache.json'), JSON.stringify({ models: [
+    { slug: 'gpt-6-astra', visibility: 'list', priority: 1 },
+    { slug: 'gpt-6-sol', visibility: 'list', priority: 2 },
+    { slug: 'gpt-6-luna', visibility: 'list', priority: 3 },
+  ] }));
   if (instructions !== undefined) fs.writeFileSync(path.join(codexHome, 'AGENTS.md'), instructions);
   fs.mkdirSync(bin);
   copyRuntime(ROOT, source);
@@ -91,6 +96,18 @@ function fixture(t, healthy, { marketplace = false, bundled = false, incompatibl
     if (args[0] === '--version') console.log('codex fixture');
     else if (args.join(' ') === 'exec --help') console.log('--ignore-user-config --ephemeral --json --strict-config');
     else if (args.join(' ') === 'debug models --bundled') console.log(JSON.stringify({models:[{slug:'gpt-6-astra'}]}));
+    else if (args[0] === 'debug' && args[1] === 'models') {
+      import(${JSON.stringify(path.join(source, 'scripts/toml.js'))}).then(({ parseToml }) => {
+        const fs = require('node:fs');
+        const config = parseToml(fs.readFileSync(${JSON.stringify(configPath)}, 'utf8'));
+        for (let i = 2; i < args.length; i += 2) {
+          if (args[i] !== '-c') process.exit(9);
+          Object.assign(config, parseToml(args[i + 1]));
+        }
+        if ((config.model_provider ?? 'openai') !== 'openai') process.exit(9);
+        console.log(fs.readFileSync(config.model_catalog_json ?? ${JSON.stringify(path.join(codexHome, 'models_cache.json'))}, 'utf8'));
+      });
+    }
     else if (args.join(' ') === 'plugin add --help') process.exit(${noPluginSupport ? 9 : 0});
     else if (args[0] === 'plugin' && args[1] === 'add') {
       if (${pluginFailure}) process.exit(9);
@@ -153,6 +170,27 @@ function fixture(t, healthy, { marketplace = false, bundled = false, incompatibl
   const result = run();
   return { home, source, configPath, original, result, run, calls: fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse) : [] };
 }
+
+test('installation preserves the current native catalog and refreshes it on reinstall', t => {
+  const installed = fixture(t, true, { platform: 'linux', customCodexHome: true });
+  assert.equal(installed.result.status, 0, installed.result.stderr);
+  const stateDir = path.join(installed.home, '.config/deepcodex/desktop');
+  const cachePath = path.join(path.dirname(installed.configPath), 'models_cache.json');
+  const native = JSON.parse(fs.readFileSync(cachePath)).models;
+  const verify = expected => {
+    const models = JSON.parse(fs.readFileSync(path.join(stateDir, 'models.json'))).models;
+    assert.deepEqual(models.filter(model => model.slug !== 'deepseek-flash'), expected);
+    assert.equal(models.filter(model => model.slug === 'deepseek-flash').length, 1);
+    const state = JSON.parse(fs.readFileSync(path.join(stateDir, 'state.json')));
+    assert.deepEqual(state.config.native_models, expected.map(model => model.slug));
+  };
+  verify(native);
+  const updated = [...native, { slug: 'new-native-model', visibility: 'list', priority: 4 }];
+  fs.writeFileSync(cachePath, JSON.stringify({ models: updated }));
+  const repeated = installed.run();
+  assert.equal(repeated.status, 0, repeated.stderr);
+  verify(updated);
+});
 
 macTest('installation associates the LaunchAgent with a branded app that runs the copied runtime', t => {
   const { home, source, configPath, original, result, calls } = fixture(t, true);

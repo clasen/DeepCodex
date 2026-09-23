@@ -233,8 +233,14 @@ export async function install() {
   if (parsed.model_catalog_json && path.resolve(expandHome(parsed.model_catalog_json)) !== path.join(STATE, 'models.json')) {
     catalog = readJson(expandHome(parsed.model_catalog_json));
   } else {
-    const result = runCodex(diagnosis.codex, ['debug', 'models', '--bundled'], env);
-    if (result.error || result.status !== 0) throw new Error('Cannot read the bundled Codex model catalog');
+    const args = ['debug', 'models', '-c', 'model_provider="openai"'];
+    if (parsed.model_catalog_json) {
+      // The managed catalog overrides discovery; reinstall from Codex's native cache.
+      const cache = path.join(path.dirname(configPath), 'models_cache.json');
+      args.push('-c', `model_catalog_json=${JSON.stringify(cache)}`);
+    }
+    const result = runCodex(diagnosis.codex, args, env);
+    if (result.error || result.status !== 0) throw new Error('Cannot read the current Codex model catalog');
     catalog = JSON.parse(result.stdout);
   }
   const nativeModels = catalog.models.filter(entry => entry.slug !== original.codex.model);
