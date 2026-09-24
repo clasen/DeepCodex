@@ -144,6 +144,7 @@ export async function run() {
   Object.assign(config, {
     child_model: workerConfig.codex.model,
     native_models: [config.parent_model],
+    relay_model: config.parent_model,
     deepseek_url: `${providerConfig.base_url}/responses`,
     receipts: path.join(runDir, 'receipts.jsonl'),
     markers,
@@ -173,8 +174,9 @@ export async function run() {
       emit({ event: 'pilot.router_started', ...ready, cwd: workspace, owner: 'DeepCodex isolated pilot',
         artifacts: runDir });
       const values = { ...workerConfig.codex };
+      delete values.model_reasoning_effort;
       Object.assign(values, { model: config.parent_model, model_provider: 'deepcodex-pilot',
-        model_reasoning_effort: config.parent_effort, model_catalog_json: catalog,
+        model_catalog_json: catalog,
         cli_auth_credentials_store: 'file',
         agents: { enabled: true, max_concurrent_threads_per_session: 1 } });
       values.features = { ...values.features, multi_agent: true, multi_agent_v2: true,

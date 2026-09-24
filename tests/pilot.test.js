@@ -35,6 +35,7 @@ const FAKE_CODEX = [
   '  pid: process.pid, argv: args, cwd: process.cwd(), home,',
   "  auth: fs.existsSync(path.join(home, 'auth.json')),",
   "  config: fs.existsSync(path.join(home, 'config.toml')),",
+  "  parentEffortConfigured: fs.readFileSync(path.join(home, 'config.toml'), 'utf8').includes('model_reasoning_effort='),",
   '  deepseek: Boolean(process.env.DEEPSEEK_API_KEY),',
   "}) + '\\n');",
   "if (process.env.FAKE_CODEX_MODE === 'hang') {",
@@ -129,7 +130,7 @@ function harness(t, { mode = 'complete', auth = true, vanish = false, failKill =
   fs.writeFileSync(path.join(root, 'runner.js'), RUNNER);
   fs.writeFileSync(path.join(root, 'prompts/worker.md'), 'fake child instructions\n');
   fs.writeFileSync(path.join(root, 'config/pilot.json'), JSON.stringify({ parent_model: 'gpt-6-astra',
-    parent_effort: 'low', timeout_seconds: 20, request_timeout_ms: 1000, startup_timeout_seconds: 20 }));
+    timeout_seconds: 20, request_timeout_ms: 1000, startup_timeout_seconds: 20 }));
   fs.writeFileSync(box.codex, FAKE_CODEX);
   fs.chmodSync(box.codex, 0o700);
   if (auth) fs.writeFileSync(path.join(box.codexHome, 'auth.json'), '{"tokens": {}}\n');
@@ -299,6 +300,7 @@ test('run drives the fake Codex, assesses the receipts and removes the temporary
   assert.equal(records[0].home, path.join(result.artifacts, 'codex-home'));
   assert.equal(records[0].auth, true);
   assert.equal(records[0].config, true);
+  assert.equal(records[0].parentEffortConfigured, false);
   assert.equal(records[0].deepseek, false);
   assert.equal(fs.existsSync(path.join(result.artifacts, 'codex-home')), false);
   assert.equal(fs.existsSync(path.join(box.codexHome, 'auth.json')), true);

@@ -45,6 +45,7 @@ async function harness(t, behave, { config = {}, key = DEEPSEEK_KEY } = {}) {
   const upstreamUrl = `http://127.0.0.1:${upstream.address().port}/responses`;
   const router = await startPilot({
     ...PILOT_CONFIG, child_model: 'deepseek-flash', native_models: [NATIVE_MODEL],
+    relay_model: NATIVE_MODEL,
     native_url: upstreamUrl, deepseek_url: upstreamUrl, receipts, markers: [], request_timeout_ms: 2000,
     ...config,
   }, key, CAPABILITY);
@@ -341,4 +342,29 @@ test('relay callbacks share the request id of the turn that triggered them', asy
   assert.equal(relay.request_id, child.request_id);
   assert.match(relay.request_id, UUID);
   assert.equal(new Date(relay.timestamp).toISOString(), relay.timestamp);
+});
+
+test('encrypted handoff relay uses the configured native model', async t => {
+  const models = [];
+  const relayCall = { id: 'fc_relay', type: 'function_call', call_id: 'call_relay',
+    name: 'relay_external_agent_payload', arguments: JSON.stringify({ payload: 'relayed task' }) };
+  const box = await harness(t, async (request, response) => {
+    const parts = [];
+    for await (const part of request) parts.push(part);
+    const payload = JSON.parse(Buffer.concat(parts));
+    models.push(payload.model);
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.end(sseBody([{ type: 'response.completed', response: {
+      id: 'resp_fixture', status: 'completed', model: payload.model,
+      output: payload.tool_choice?.name === 'relay_external_agent_payload' ? [relayCall] : [],
+    } }]));
+  }, { config: { relay_model: 'gpt-6-sol', native_models: [NATIVE_MODEL, 'gpt-6-sol'] } });
+  const response = await box.request({ body: JSON.stringify({ model: 'deepseek-flash', input: [
+    { type: 'agent_message', recipient: 'flash',
+      content: [{ type: 'encrypted_content', encrypted_content: 'gAAAAAbcdef' }] },
+  ] }) });
+  assert.equal(response.status, 200);
+  await response.text();
+  assert.deepEqual(models, ['gpt-6-sol', 'deepseek-flash']);
+  assert.equal(box.entries().find(entry => entry.route === 'relay').model, 'gpt-6-sol');
 });

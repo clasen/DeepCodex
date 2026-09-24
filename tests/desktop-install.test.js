@@ -199,6 +199,16 @@ test('installation preserves the current native catalog and refreshes it on rein
   verify(updated);
 });
 
+test('installation uses the selected native model for encrypted handoff relays', t => {
+  const installed = fixture(t, true, {
+    platform: 'linux', config: 'model="gpt-6-sol"\n[mcp_servers.example]\ncommand="example"\n',
+  });
+  assert.equal(installed.result.status, 0, installed.result.stderr);
+  const state = JSON.parse(fs.readFileSync(path.join(installed.home, '.config/deepcodex/desktop/state.json')));
+  assert.equal(state.config.relay_model, 'gpt-6-sol');
+  assert.equal(parseToml(fs.readFileSync(installed.configPath, 'utf8')).model, 'gpt-6-sol');
+});
+
 test('installation applies the saved Jev compaction choice', t => {
   const installed = fixture(t, true, { platform: 'linux', jevEnabled: true });
   assert.equal(installed.result.status, 0, installed.result.stderr);
@@ -454,6 +464,8 @@ macTest('uninstall preserves unrelated config edits made after installation', t 
   fs.writeFileSync(installed.configPath, configured);
   const reinstalled = installed.run();
   assert.equal(reinstalled.status, 0, reinstalled.stderr);
+  const state = JSON.parse(fs.readFileSync(path.join(installed.home, '.config/deepcodex/desktop/state.json')));
+  assert.equal(state.config.relay_model, 'gpt-6-sol');
   const result = removeInstallation(installed);
   assert.equal(result.status, 0, result.stderr);
   const restored = fs.readFileSync(installed.configPath, 'utf8');

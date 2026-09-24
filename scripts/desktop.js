@@ -369,10 +369,13 @@ export async function install() {
     catalog = JSON.parse(result.stdout);
   }
   const nativeModels = catalog.models.filter(entry => entry.slug !== original.codex.model);
+  const relayModel = parsed.model ?? nativeModels[0]?.slug;
+  if (!nativeModels.some(entry => entry.slug === relayModel)) throw new Error('Selected native model is missing from the Codex catalog');
   const child = { ...original.model_metadata, slug: original.codex.model, multi_agent_version: 'v2',
     base_instructions: fs.readFileSync(path.join(ROOT, 'prompts/worker.md'), 'utf8') };
   privateWrite(path.join(STATE, 'models.json'), JSON.stringify({ models: [...nativeModels, child] }));
   Object.assign(config, { native_models: nativeModels.map(entry => entry.slug), child_model: child.slug,
+    relay_model: relayModel,
     deepseek_url: provider.base_url + '/responses',
     receipts: path.join(STATE, 'receipts.jsonl'), markers: [] });
   const statePath = path.join(STATE, 'state.json');

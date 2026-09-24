@@ -1,7 +1,5 @@
 {
   "parent_model": "gpt-6-astra",
-  "parent_effort": "low",
-  "relay_model": "gpt-6-astra",
   "native_url": "https://chatgpt.com/backend-api/codex/responses",
   "timeout_seconds": 300,
   "request_timeout_ms": 120000,
